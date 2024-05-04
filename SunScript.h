@@ -44,6 +44,12 @@ namespace SunScript
 
     void ReleaseProgram(Program* program);
 
+    void EmitReturn(Program* program);
+
+    void EmitBeginFunction(Program* program, const std::string& name, int numArgs);
+
+    void EmitEndFunction(Program* program);
+
     void EmitLocal(Program* program, const std::string& name);
     
     void EmitSet(Program* program, const std::string& name, int value);
@@ -57,6 +63,8 @@ namespace SunScript
     void EmitPush(Program* program, const std::string& value);
 
     void EmitPop(Program* program, const std::string& localName);
+
+    void EmitPop(Program* program);
 
     void EmitYield(Program* program, const std::string& name);
 

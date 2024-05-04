@@ -1,0 +1,24 @@
+program        - statement* EOF ;
+
+statement      - exprStmt ;
+
+exprStmt       - expression ";"
+                 | ifStmt 
+                 | function;
+
+ifSrmt         - "if" "(" equality ")" "{" (statement*) "}"
+
+expression     - equality ;
+equality       - comparison ( ( "!=" | "==" ) comparison )* ;
+comparison     - term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
+term           - factor ( ( "-" | "+" ) factor )* ;
+factor         - unary ( ( "/" | "*" ) unary )* ;
+unary          - ( "!" | "-" ) unary
+               | call ;
+primary        - NUMBER | STRING | "true" | "false" | "nil"
+               | "(" expression ")" ;
+call           - primary "(" argument? ")" ;
+argument       - expression ( "," expression )* ;
+function       - "function" identifier "(" parameter? ")" "{" (statement*) "}";
+parameter      - identifier ( "," identifier )* ;
+return         - "return" expression ;

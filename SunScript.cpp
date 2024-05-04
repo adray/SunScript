@@ -27,6 +27,10 @@ constexpr unsigned char OP_GREATER_THAN = 0x1f;
 constexpr unsigned char OP_LESS_THAN = 0x20;
 constexpr unsigned char OP_END_IF = 0x21;
 constexpr unsigned char OP_FORMAT = 0x22;
+constexpr unsigned char OP_BEGIN_FUNCTION = 0x23;
+constexpr unsigned char OP_END_FUNCTION = 0x24;
+constexpr unsigned char OP_RETURN = 0x25;
+constexpr unsigned char OP_POP_DISCARD = 0x26;
 
 constexpr unsigned char TY_VOID = 0x0;
 constexpr unsigned char TY_INT = 0x1;
@@ -40,15 +44,32 @@ namespace SunScript
         unsigned int index;
     };
 
+    struct StackFrame
+    {
+        int returnAddress;
+        std::unordered_map<std::string, Value> locals;
+        std::vector<std::string> strings;
+        std::vector<int> integers;
+    };
+
+    struct Function
+    {
+        int offset;
+        int numArgs;
+    };
+
     struct VirtualMachine
     {
         unsigned int programCounter;
         unsigned int disabledCounter;
+        unsigned int programOffset;
         bool running;
         int statusCode;
         int errorCode;
         std::string callName;
+        std::stack<StackFrame> frames;
         std::stack<Value> stack;
+        std::unordered_map<std::string, Function> functions;
         std::unordered_map<std::string, Value> locals;
         std::vector<std::string> strings;
         std::vector<int> integers;
@@ -59,6 +80,8 @@ namespace SunScript
     struct Program
     {
         std::vector<unsigned char> data;
+        std::vector<unsigned char> functions;
+        int numFunctions;
     };
 }
 
@@ -312,8 +335,17 @@ static void Op_Push_Local(VirtualMachine* vm, unsigned char* program)
 
     if (vm->statusCode == VM_OK)
     {
-        auto& local = vm->locals[name];
-        vm->stack.push(local);
+        const auto& it = vm->locals.find(name);
+        if (it != vm->locals.end())
+        {
+            auto& local = vm->locals[name];
+            vm->stack.push(local);
+        }
+        else
+        {
+            vm->statusCode = VM_ERROR;
+            vm->running = false;
+        }
     }
 }
 
@@ -331,6 +363,92 @@ static void Op_Push(VirtualMachine* vm, unsigned char* program)
     }
 }
 
+static void Op_Return(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->statusCode == VM_OK)
+    {
+        if (vm->frames.size() == 0)
+        {
+            vm->statusCode = VM_ERROR;
+            vm->running = false;
+            return;
+        }
+
+        StackFrame frame = vm->frames.top();
+
+        // Copy the return value into the stack frame.
+        if (vm->stack.size() > 0)
+        {
+            Value retValue = vm->stack.top();
+            vm->stack.pop();
+
+            Value remapped = {};
+            remapped.type = retValue.type;
+            switch (retValue.type)
+            {
+            case TY_INT:
+                frame.integers.push_back(vm->integers[retValue.index]);
+                remapped.index = int(frame.integers.size()) - 1;
+                break;
+            case TY_STRING:
+                frame.strings.push_back(vm->strings[retValue.index]);
+                remapped.index = int(frame.strings.size()) - 1;
+                break;
+            }
+            vm->stack.push(remapped);
+        }
+
+        vm->locals = frame.locals;
+        vm->integers = frame.integers;
+        vm->strings = frame.strings;
+        vm->frames.pop();
+        vm->programCounter = frame.returnAddress;
+    }
+}
+
+static void CreateStackFrame(VirtualMachine* vm, StackFrame& frame, int numArguments)
+{
+    frame.returnAddress = vm->programCounter;
+    frame.integers = vm->integers;
+    frame.locals = vm->locals;
+    frame.strings = vm->strings;
+
+    vm->strings.clear();
+    vm->integers.clear();
+    vm->locals.clear();
+
+    std::vector<Value> imStack;
+
+    for (int i = 0; i < numArguments; i++)
+    {
+        auto& top = vm->stack.top();
+
+        Value val = {};
+        val.type = top.type;
+
+        switch (top.type)
+        {
+        case TY_INT:
+            vm->integers.push_back(frame.integers[top.index]);
+            val.index = int(vm->integers.size()) - 1;
+            break;
+        case TY_STRING:
+            vm->strings.push_back(frame.strings[top.index]);
+            val.index = int(vm->strings.size()) - 1;
+            break;
+        }
+
+        imStack.push_back(val);
+        vm->stack.pop();
+    }
+
+    for (int i = int(imStack.size()) - 1; i >= 0; i--)
+    {
+        auto& val = imStack[i];
+        vm->stack.push(val);
+    }
+}
+
 static void Op_Call(VirtualMachine* vm, unsigned char* program)
 {
     if (vm->handler)
@@ -340,7 +458,19 @@ static void Op_Call(VirtualMachine* vm, unsigned char* program)
         vm->callName = Read_String(program, &vm->programCounter);
         if (vm->statusCode == VM_OK)
         {
-            vm->handler(vm);
+            const auto& it = vm->functions.find(vm->callName);
+            if (it != vm->functions.end())
+            {
+                const int address = it->second.offset + vm->programOffset;
+                StackFrame frame = {};
+                CreateStackFrame(vm, frame, it->second.numArgs);
+                vm->frames.push(frame);
+                vm->programCounter = address;
+            }
+            else
+            {
+                vm->handler(vm);
+            }
         }
     }
     else
@@ -403,19 +533,34 @@ static void Op_If(VirtualMachine* vm, unsigned char* program)
             vm->statusCode = VM_ERROR;
         }
     }
+    else if (vm->statusCode == VM_PAUSED)
+    {
+        vm->disabledCounter++;
+    }
 }
 
 static void Op_EndIf(VirtualMachine* vm, unsigned char* program)
 {
-    vm->disabledCounter--;
-    if (vm->disabledCounter == 0)
+    if (vm->statusCode == VM_PAUSED)
     {
-        vm->statusCode = VM_OK;
+        if (vm->disabledCounter == 0)
+        {
+            vm->statusCode = VM_ERROR;
+            vm->running = false;
+        }
+        vm->disabledCounter--;
+        if (vm->disabledCounter == 0)
+        {
+            vm->statusCode = VM_OK;
+        }
     }
-    else if (vm->disabledCounter < 0)
+}
+
+static void Op_Pop_Discard(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->statusCode == VM_OK && vm->stack.size() > 0)
     {
-        vm->statusCode = VM_ERROR;
-        vm->running = false;
+        vm->stack.pop();
     }
 }
 
@@ -683,6 +828,7 @@ static void ResetVM(VirtualMachine* vm)
 {
     vm->programCounter = 0;
     vm->disabledCounter = 0;
+    vm->programOffset = 0;
     vm->errorCode = 0;
     while (!vm->stack.empty()) { vm->stack.pop(); }
     vm->integers.clear();
@@ -690,9 +836,29 @@ static void ResetVM(VirtualMachine* vm)
     vm->locals.clear();
 }
 
+static void ScanFunctions(VirtualMachine* vm, unsigned char* program)
+{
+    const int numFunctions = Read_Int(program, &vm->programCounter);
+    for (int i = 0; i < numFunctions; i++)
+    {
+        const int functionOffset = Read_Int(program, &vm->programCounter);
+        const int numArgs = Read_Int(program, &vm->programCounter);
+        const std::string name = Read_String(program, &vm->programCounter);
+        
+        Function func = {};
+        func.numArgs = numArgs;
+        func.offset = functionOffset;
+
+        vm->functions.insert(std::pair<std::string, Function>(name, func));
+    }
+
+    vm->programOffset = vm->programCounter;
+}
+
 int SunScript::RunScript(VirtualMachine* vm, unsigned char* program)
 {
     ResetVM(vm);
+    ScanFunctions(vm, program);
 
     return ResumeScript(vm, program);
 }
@@ -756,6 +922,28 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
         case OP_FORMAT:
             Op_Format(vm, program);
             break;
+        case OP_RETURN:
+            Op_Return(vm, program);
+            break;
+        case OP_BEGIN_FUNCTION:
+            vm->disabledCounter++;
+            vm->statusCode = VM_PAUSED;
+            break;
+        case OP_END_FUNCTION:
+            if (vm->disabledCounter == 0)
+            {
+                vm->statusCode = VM_ERROR;
+                vm->running = false;
+            }
+            else
+            {
+                vm->disabledCounter--;
+                vm->statusCode = vm->disabledCounter == 0 ? VM_OK : VM_PAUSED;
+            }
+            break;
+        case OP_POP_DISCARD:
+            Op_Pop_Discard(vm, program);
+            break;
         }
     }
 
@@ -802,7 +990,9 @@ int SunScript::GetParamString(VirtualMachine* vm, std::string* param)
 
 Program* SunScript::CreateProgram()
 {
-    return new Program();
+    Program* prog = new Program();
+    prog->numFunctions = 0;
+    return prog;
 }
 
 void SunScript::ResetProgram(Program* program)
@@ -812,8 +1002,14 @@ void SunScript::ResetProgram(Program* program)
 
 int SunScript::GetProgram(Program* program, unsigned char** programData)
 {
-    *programData = new unsigned char[program->data.size()];
-    std::memcpy(*programData, program->data.data(), program->data.size());
+    *programData = new unsigned char[program->data.size() + program->functions.size() + sizeof(std::int32_t)];
+    const int numFunctions = program->numFunctions;
+    (*programData)[0] = (unsigned char)(numFunctions & 0xFF);
+    (*programData)[1] = (unsigned char)((numFunctions >> 8) & 0xFF);
+    (*programData)[2] = (unsigned char)((numFunctions >> 16) & 0xFF);
+    (*programData)[3] = (unsigned char)((numFunctions >> 24) & 0xFF);
+    std::memcpy(*programData + sizeof(std::int32_t), program->functions.data(), program->functions.size());
+    std::memcpy(*programData + program->functions.size() + sizeof(std::int32_t), program->data.data(), program->data.size());
     return (int)program->data.size();
 }
 
@@ -822,82 +1018,108 @@ void SunScript::ReleaseProgram(Program* program)
     delete program;
 }
 
-static void EmitInt(Program* program, const int value)
+static void EmitInt(std::vector<unsigned char>& data, const int value)
 {
-    program->data.push_back(value & 0xFF);
-    program->data.push_back((value >> 8) & 0xFF);
-    program->data.push_back((value >> 16) & 0xFF);
-    program->data.push_back((value >> 24) & 0xFF);
+    data.push_back(value & 0xFF);
+    data.push_back((value >> 8) & 0xFF);
+    data.push_back((value >> 16) & 0xFF);
+    data.push_back((value >> 24) & 0xFF);
 }
 
-static void EmitString(Program* program, const std::string& value)
+static void EmitString(std::vector<unsigned char>& data, const std::string& value)
 {
     for (char val : value)
     {
-        program->data.push_back(val);
+        data.push_back(val);
     }
 
-    program->data.push_back(0);
+    data.push_back(0);
+}
+
+void SunScript::EmitReturn(Program* program)
+{
+    program->data.push_back(OP_RETURN);
+}
+
+void SunScript::EmitBeginFunction(Program* program, const std::string& name, int numArgs)
+{
+    program->data.push_back(OP_BEGIN_FUNCTION);
+
+    const int offset = int(program->data.size());
+    EmitInt(program->functions, offset);
+    EmitInt(program->functions, numArgs);
+    EmitString(program->functions, name);
+    program->numFunctions++;
+}
+
+void SunScript::EmitEndFunction(Program* program)
+{
+    program->data.push_back(OP_END_FUNCTION);
 }
 
 void SunScript::EmitLocal(Program* program, const std::string& name)
 {
     program->data.push_back(OP_LOCAL);
-    EmitString(program, name);
+    EmitString(program->data, name);
 }
 
 void SunScript::EmitSet(Program* program, const std::string& name, int value)
 {
     program->data.push_back(OP_SET);
     program->data.push_back(TY_INT);
-    EmitString(program, name);
-    EmitInt(program, value);
+    EmitString(program->data, name);
+    EmitInt(program->data, value);
 }
 
 void SunScript::EmitSet(Program* program, const std::string& name, const std::string& value)
 {
     program->data.push_back(OP_SET);
     program->data.push_back(TY_STRING);
-    EmitString(program, name);
-    EmitString(program, value);
+    EmitString(program->data, name);
+    EmitString(program->data, value);
 }
 
 void SunScript::EmitPushLocal(Program* program, const std::string& localName)
 {
     program->data.push_back(OP_PUSH_LOCAL);
-    EmitString(program, localName);
+    EmitString(program->data, localName);
 }
 
 void SunScript::EmitPush(Program* program, int value)
 {
     program->data.push_back(OP_PUSH);
     program->data.push_back(TY_INT);
-    EmitInt(program, value);
+    EmitInt(program->data, value);
 }
 
 void SunScript::EmitPush(Program* program, const std::string& value)
 {
     program->data.push_back(OP_PUSH);
     program->data.push_back(TY_STRING);
-    EmitString(program, value);
+    EmitString(program->data, value);
 }
 
 void SunScript::EmitPop(Program* program, const std::string& localName)
 {
     program->data.push_back(OP_POP);
-    EmitString(program, localName);
+    EmitString(program->data, localName);
+}
+
+void SunScript::EmitPop(Program* program)
+{
+    program->data.push_back(OP_POP_DISCARD);
 }
 
 void SunScript::EmitYield(Program* program, const std::string& name)
 {
     program->data.push_back(OP_YIELD);
-    EmitString(program, name);
+    EmitString(program->data, name);
 }
 
 void SunScript::EmitCall(Program* program, const std::string& name)
 {
     program->data.push_back(OP_CALL);
-    EmitString(program, name);
+    EmitString(program->data, name);
 }
 
 void SunScript::EmitAdd(Program* program)
