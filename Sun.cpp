@@ -836,11 +836,14 @@ Call* Parser::ParseArgument()
 {
     Call* call = new Call();
     Expr* expr = ParseExpression();
-    call->PushArg(expr);
-    while (Match(TokenType::COMMA))
+    if (expr)
     {
-        Advance();
-        call->PushArg(ParseExpression());
+        call->PushArg(expr);
+        while (Match(TokenType::COMMA))
+        {
+            Advance();
+            call->PushArg(ParseExpression());
+        }
     }
     return call;
 }
