@@ -432,12 +432,15 @@ class Expr;
 class Call
 {
 public:
-    Call() {};
+    Call() : _yield(false) {};
     void PushArg(Expr* expr);
     inline std::vector<Expr*>& Args() { return _args; }
+    inline void SetYield() { _yield = true; }
+    inline bool Yield() const { return _yield; }
 
 private:
     std::vector<Expr*> _args;
+    bool _yield;
 };
 
 void Call::PushArg(Expr* expr)
@@ -500,6 +503,7 @@ private:
     void ParseStatement();
     void ParseFunction();
     void ParseReturn();
+    void ParseYield();
     void ParseParameter(std::vector<std::string>& params);
     Expr* ParseExprStatement();
     Expr* ParseExpression();
@@ -594,13 +598,21 @@ void Parser::EmitExpr(Expr* expr)
     case TokenType::IDENTIFIER:
         if (expr->GetCall())
         {
-            auto& args = expr->GetCall()->Args();
+            Call* call = expr->GetCall();
+            auto& args = call->Args();
             for (int i = int(args.size()) - 1; i >= 0; i--)
             {
                 EmitExpr(args[i]);
             }
 
-            EmitCall(_program, tok.String());
+            if (call->Yield())
+            {
+                EmitYield(_program, tok.String());
+            }
+            else
+            {
+                EmitCall(_program, tok.String());
+            }
             _emitCall = true;
         }
         else
@@ -667,6 +679,24 @@ void Parser::Advance()
 bool Parser::Match(TokenType type)
 {
     return _scanning && Peek().Type() == type;
+}
+
+void Parser::ParseYield()
+{
+    Advance();
+
+    Expr* expr = ParseCall();
+    if (expr)
+    {
+        expr->GetCall()->SetYield();
+
+        EmitExpr(expr);
+        FreeExpr(expr);
+    }
+    else
+    {
+        SetError("Unexcepted token.");
+    }
 }
 
 void Parser::ParseReturn()
@@ -1081,6 +1111,9 @@ void Parser::Parse()
             break;
         case TokenType::RETURN:
             ParseReturn();
+            break;
+        case TokenType::YIELD:
+            ParseYield();
             break;
         default:
             ParseStatement();

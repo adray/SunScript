@@ -4,7 +4,8 @@ statement      - exprStmt ;
 
 exprStmt       - expression ";"
                  | ifStmt 
-                 | function;
+                 | function
+                 | yield;
 
 ifSrmt         - "if" "(" equality ")" "{" (statement*) "}"
 
@@ -22,3 +23,4 @@ argument       - expression ( "," expression )* ;
 function       - "function" identifier "(" parameter? ")" "{" (statement*) "}";
 parameter      - identifier ( "," identifier )* ;
 return         - "return" expression ;
+yield          - "yield" call ;
