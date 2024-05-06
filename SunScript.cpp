@@ -66,6 +66,11 @@ namespace SunScript
         bool running;
         int statusCode;
         int errorCode;
+        int resumeCode;
+        std::int64_t timeout;
+        std::chrono::steady_clock::time_point startTime;
+        std::chrono::steady_clock clock;
+        int instructionsExecuted;
         std::string callName;
         std::stack<StackFrame> frames;
         std::stack<Value> stack;
@@ -830,6 +835,9 @@ static void ResetVM(VirtualMachine* vm)
     vm->disabledCounter = 0;
     vm->programOffset = 0;
     vm->errorCode = 0;
+    vm->instructionsExecuted = 0;
+    vm->timeout = 0;
+    vm->resumeCode = VM_OK;
     while (!vm->stack.empty()) { vm->stack.pop(); }
     vm->integers.clear();
     vm->strings.clear();
@@ -857,16 +865,41 @@ static void ScanFunctions(VirtualMachine* vm, unsigned char* program)
 
 int SunScript::RunScript(VirtualMachine* vm, unsigned char* program)
 {
+    return RunScript(vm, program, std::chrono::duration<int, std::nano>::zero());
+}
+
+int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, std::chrono::duration<int, std::nano> timeout)
+{
     ResetVM(vm);
     ScanFunctions(vm, program);
+
+    // Convert timeout to nanoseconds (or whatever it may be specified in)
+    vm->timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout).count();
 
     return ResumeScript(vm, program);
 }
 
-int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
+inline static void CheckForTimeout(VirtualMachine* vm)
+{
+    if (vm->timeout > 0 && vm->instructionsExecuted % 50 == 0)
+    {
+        std::chrono::steady_clock::time_point curTime = vm->clock.now();
+        if (curTime.time_since_epoch().count() >= vm->startTime.time_since_epoch().count() + vm->timeout)
+        {
+            vm->resumeCode = vm->statusCode;
+            vm->statusCode = VM_TIMEOUT;
+            vm->running = false;
+        }
+    }
+}
+
+int SunScript::ResumeScript(VirtualMachine * vm, unsigned char* program)
 {
     vm->running = true;
-    vm->statusCode = VM_OK;
+    vm->statusCode = vm->resumeCode;
+    vm->resumeCode = VM_OK;
+    vm->startTime = vm->clock.now();
+    vm->instructionsExecuted = 0;
 
     while (vm->running)
     {
@@ -932,8 +965,8 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
         case OP_END_FUNCTION:
             if (vm->disabledCounter == 0)
             {
-                vm->statusCode = VM_ERROR;
-                vm->running = false;
+                // If we are executing a function and we don't hit a return statement, implictly return.
+                Op_Return(vm, program);
             }
             else
             {
@@ -945,9 +978,28 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
             Op_Pop_Discard(vm, program);
             break;
         }
+
+        vm->instructionsExecuted++;
+        CheckForTimeout(vm);
     }
 
     return vm->statusCode;
+}
+
+void SunScript::PushReturnValue(VirtualMachine* vm, const std::string& value)
+{
+    if (vm->statusCode == VM_OK)
+    {
+        Push_String(vm, value);
+    }
+}
+
+void SunScript::PushReturnValue(VirtualMachine* vm, int value)
+{
+    if (vm->statusCode == VM_OK)
+    {
+        Push_Int(vm, value);
+    }
 }
 
 int SunScript::GetCallName(VirtualMachine* vm, std::string* name)
