@@ -31,10 +31,18 @@ constexpr unsigned char OP_BEGIN_FUNCTION = 0x23;
 constexpr unsigned char OP_END_FUNCTION = 0x24;
 constexpr unsigned char OP_RETURN = 0x25;
 constexpr unsigned char OP_POP_DISCARD = 0x26;
+constexpr unsigned char OP_ELSE = 0x27;
+constexpr unsigned char OP_ELSE_IF = 0x28;
 
 constexpr unsigned char TY_VOID = 0x0;
 constexpr unsigned char TY_INT = 0x1;
 constexpr unsigned char TY_STRING = 0x2;
+
+constexpr unsigned int BR_EMPTY = 0x0;
+constexpr unsigned int BR_FROZEN = 0x1;
+constexpr unsigned int BR_DISABLED = 0x2;
+constexpr unsigned int BR_EXECUTED = 0x4;
+constexpr unsigned int BR_ELSE_IF = 0x8;
 
 namespace SunScript
 {
@@ -46,7 +54,10 @@ namespace SunScript
 
     struct StackFrame
     {
+        int debugLine;
         int returnAddress;
+        std::string functionName;
+        std::stack<int> branches;
         std::unordered_map<std::string, Value> locals;
         std::vector<std::string> strings;
         std::vector<int> integers;
@@ -61,7 +72,6 @@ namespace SunScript
     struct VirtualMachine
     {
         unsigned int programCounter;
-        unsigned int disabledCounter;
         unsigned int programOffset;
         bool running;
         int statusCode;
@@ -71,9 +81,12 @@ namespace SunScript
         std::chrono::steady_clock::time_point startTime;
         std::chrono::steady_clock clock;
         int instructionsExecuted;
+        int debugLine;
         std::string callName;
+        std::stack<int> branches;
         std::stack<StackFrame> frames;
         std::stack<Value> stack;
+        std::unordered_map<int, int> debugLines;
         std::unordered_map<std::string, Function> functions;
         std::unordered_map<std::string, Value> locals;
         std::vector<std::string> strings;
@@ -84,10 +97,49 @@ namespace SunScript
 
     struct Program
     {
+        std::vector<unsigned char> debug;
         std::vector<unsigned char> data;
         std::vector<unsigned char> functions;
         int numFunctions;
+        int numLines;
     };
+}
+
+Callstack* SunScript::GetCallStack(VirtualMachine* vm)
+{
+    Callstack* stack = new Callstack();
+    Callstack* tail = stack;
+    std::stack<StackFrame> frames(vm->frames);
+
+    int debugLine = vm->debugLine;
+    while (frames.size() > 0)
+    {
+        auto& frame = frames.top();
+        tail->functionName = frame.functionName;
+        tail->numArgs = vm->functions[frame.functionName].numArgs;
+        tail->debugLine = debugLine;
+        
+        frames.pop();
+        debugLine = frame.debugLine;
+        tail->next = new Callstack();
+        tail = tail->next;
+    }
+
+    tail->functionName = "main";
+    tail->numArgs = 0;
+    tail->debugLine = debugLine;
+
+    return stack;
+}
+
+void SunScript::DestroyCallstack(Callstack* stack)
+{
+    while (stack)
+    {
+        Callstack* next = stack->next;
+        delete stack;
+        stack = next;
+    }
 }
 
 VirtualMachine* SunScript::CreateVirtualMachine()
@@ -406,6 +458,7 @@ static void Op_Return(VirtualMachine* vm, unsigned char* program)
         vm->locals = frame.locals;
         vm->integers = frame.integers;
         vm->strings = frame.strings;
+        vm->branches = frame.branches;
         vm->frames.pop();
         vm->programCounter = frame.returnAddress;
     }
@@ -417,10 +470,12 @@ static void CreateStackFrame(VirtualMachine* vm, StackFrame& frame, int numArgum
     frame.integers = vm->integers;
     frame.locals = vm->locals;
     frame.strings = vm->strings;
+    frame.branches = vm->branches;
 
     vm->strings.clear();
     vm->integers.clear();
     vm->locals.clear();
+    vm->branches = std::stack<int>();
 
     std::vector<Value> imStack;
 
@@ -468,6 +523,8 @@ static void Op_Call(VirtualMachine* vm, unsigned char* program)
             {
                 const int address = it->second.offset + vm->programOffset;
                 StackFrame frame = {};
+                frame.functionName = vm->callName;
+                frame.debugLine = vm->debugLine;
                 CreateStackFrame(vm, frame, it->second.numArgs);
                 vm->frames.push(frame);
                 vm->programCounter = address;
@@ -523,12 +580,27 @@ static void Op_If(VirtualMachine* vm, unsigned char* program)
             }
             else
             {
+                int br = BR_EMPTY;
                 if (vm->integers[val.index] == 0)
                 {
-                    vm->disabledCounter++;
+                    br |= BR_DISABLED;
                     vm->statusCode = VM_PAUSED;
                 }
+                else
+                {
+                    br |= BR_EXECUTED;
+                }
 
+                if (vm->branches.size() > 0)
+                {
+                    const int br = vm->branches.top();
+                    if ((br & BR_ELSE_IF) == BR_ELSE_IF)
+                    {
+                        vm->branches.pop();
+                    }
+                }
+
+                vm->branches.push(br);
                 vm->stack.pop();
             }
         }
@@ -540,21 +612,104 @@ static void Op_If(VirtualMachine* vm, unsigned char* program)
     }
     else if (vm->statusCode == VM_PAUSED)
     {
-        vm->disabledCounter++;
+        int nbr = BR_FROZEN | BR_DISABLED;
+        if (vm->branches.size() > 0)
+        {
+            const int br = vm->branches.top();
+            if ((br & BR_ELSE_IF) == BR_ELSE_IF)
+            {
+                vm->branches.pop();
+                nbr |= br & BR_EXECUTED;
+            }
+        }
+
+        vm->branches.push(nbr);
+    }
+}
+
+static void Op_Else(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->branches.size() == 0)
+    {
+        vm->statusCode = VM_ERROR;
+        vm->running = false;
+        return;
+    }
+
+    int br = vm->branches.top();
+    if ((br & BR_EXECUTED) == BR_EXECUTED)
+    {
+        // If the branch has been executed then we don't need to run.
+        vm->statusCode = VM_PAUSED;
+
+        vm->branches.pop();
+        br |= BR_DISABLED;
+        vm->branches.push(br);
+    }
+    else if ((br & BR_FROZEN) == BR_EMPTY)
+    {
+        // Otherwise we should execute the ELSE clause.
+        vm->statusCode = VM_OK;
+
+        vm->branches.pop();
+        br &= ~BR_DISABLED;
+        vm->branches.push(br);
+    }
+}
+
+static void Op_Else_If(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->branches.size() == 0)
+    {
+        vm->statusCode = VM_ERROR;
+        vm->running = false;
+        return;
+    }
+
+    int br = vm->branches.top();
+    if ((br & BR_EXECUTED) == BR_EXECUTED)
+    {
+        // If the branch has been executed then we don't need to run.
+        vm->statusCode = VM_PAUSED;
+
+        vm->branches.pop();
+        br |= BR_DISABLED | BR_ELSE_IF;
+        vm->branches.push(br);
+    }
+    else if ((br & BR_FROZEN) == BR_EMPTY)
+    {
+        // Otherwise we should execute the ELSE IF expression (and possibly the ELSE IF clause).
+        vm->statusCode = VM_OK;
+
+        vm->branches.pop();
+        br &= ~BR_DISABLED;
+        br |= BR_ELSE_IF;
+        vm->branches.push(br);
     }
 }
 
 static void Op_EndIf(VirtualMachine* vm, unsigned char* program)
 {
-    if (vm->statusCode == VM_PAUSED)
+    if (vm->branches.size() == 0)
     {
-        if (vm->disabledCounter == 0)
+        vm->statusCode = VM_ERROR;
+        vm->running = false;
+        return;
+    }
+
+    vm->branches.pop();
+    if (vm->branches.size() == 0)
+    {
+        vm->statusCode = VM_OK;
+    }
+    else
+    {
+        const int br = vm->branches.top();
+        if ((br & BR_DISABLED) == BR_DISABLED)
         {
-            vm->statusCode = VM_ERROR;
-            vm->running = false;
+            vm->statusCode = VM_PAUSED;
         }
-        vm->disabledCounter--;
-        if (vm->disabledCounter == 0)
+        else
         {
             vm->statusCode = VM_OK;
         }
@@ -565,7 +720,15 @@ static void Op_Pop_Discard(VirtualMachine* vm, unsigned char* program)
 {
     if (vm->statusCode == VM_OK && vm->stack.size() > 0)
     {
-        vm->stack.pop();
+        if (vm->branches.size() == 0)
+        {
+            vm->statusCode = VM_ERROR;
+            vm->running = false;
+        }
+        else
+        {
+            vm->stack.pop();
+        }
     }
 }
 
@@ -832,16 +995,20 @@ static void Op_Format(VirtualMachine* vm, unsigned char* program)
 static void ResetVM(VirtualMachine* vm)
 {
     vm->programCounter = 0;
-    vm->disabledCounter = 0;
     vm->programOffset = 0;
     vm->errorCode = 0;
     vm->instructionsExecuted = 0;
     vm->timeout = 0;
     vm->resumeCode = VM_OK;
     while (!vm->stack.empty()) { vm->stack.pop(); }
+    while (!vm->frames.empty()) { vm->frames.pop(); }
     vm->integers.clear();
     vm->strings.clear();
     vm->locals.clear();
+    vm->debugLines.clear();
+    while (!vm->branches.empty()) {
+        vm->branches.pop();
+    }
 }
 
 static void ScanFunctions(VirtualMachine* vm, unsigned char* program)
@@ -863,15 +1030,41 @@ static void ScanFunctions(VirtualMachine* vm, unsigned char* program)
     vm->programOffset = vm->programCounter;
 }
 
+static void ScanDebugData(VirtualMachine* vm, unsigned char* debugData)
+{
+    if (debugData)
+    {
+        unsigned int pos = 0;
+        const int numLines = Read_Int(debugData, &pos);
+        for (int i = 0; i < numLines; i++)
+        {
+            const int pc = Read_Int(debugData, &pos);
+            const int line = Read_Int(debugData, &pos);
+            vm->debugLines.insert(std::pair<int, int>(pc, line));
+        }
+    }
+}
+
 int SunScript::RunScript(VirtualMachine* vm, unsigned char* program)
 {
-    return RunScript(vm, program, std::chrono::duration<int, std::nano>::zero());
+    return RunScript(vm, program, nullptr);
+}
+
+int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData)
+{
+    return RunScript(vm, program, debugData, std::chrono::duration<int, std::nano>::zero());
 }
 
 int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, std::chrono::duration<int, std::nano> timeout)
 {
+    return RunScript(vm, program, nullptr, timeout);
+}
+
+int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData, std::chrono::duration<int, std::nano> timeout)
+{
     ResetVM(vm);
     ScanFunctions(vm, program);
+    ScanDebugData(vm, debugData);
 
     // Convert timeout to nanoseconds (or whatever it may be specified in)
     vm->timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout).count();
@@ -893,7 +1086,7 @@ inline static void CheckForTimeout(VirtualMachine* vm)
     }
 }
 
-int SunScript::ResumeScript(VirtualMachine * vm, unsigned char* program)
+int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
 {
     vm->running = true;
     vm->statusCode = vm->resumeCode;
@@ -903,7 +1096,13 @@ int SunScript::ResumeScript(VirtualMachine * vm, unsigned char* program)
 
     while (vm->running)
     {
-        unsigned char op = program[vm->programCounter++];
+        const auto& lineIt = vm->debugLines.find(vm->programCounter - vm->programOffset);
+        if (lineIt != vm->debugLines.end())
+        {
+            vm->debugLine = lineIt->second;
+        }
+
+        const unsigned char op = program[vm->programCounter++];
 
         switch (op)
         {
@@ -949,6 +1148,12 @@ int SunScript::ResumeScript(VirtualMachine * vm, unsigned char* program)
         case OP_IF:
             Op_If(vm, program);
             break;
+        case OP_ELSE:
+            Op_Else(vm, program);
+            break;
+        case OP_ELSE_IF:
+            Op_Else_If(vm, program);
+            break;
         case OP_END_IF:
             Op_EndIf(vm, program);
             break;
@@ -959,19 +1164,19 @@ int SunScript::ResumeScript(VirtualMachine * vm, unsigned char* program)
             Op_Return(vm, program);
             break;
         case OP_BEGIN_FUNCTION:
-            vm->disabledCounter++;
+            vm->branches.push(BR_FROZEN | BR_DISABLED);
             vm->statusCode = VM_PAUSED;
             break;
         case OP_END_FUNCTION:
-            if (vm->disabledCounter == 0)
+            if (vm->frames.size() > 0)
             {
                 // If we are executing a function and we don't hit a return statement, implictly return.
                 Op_Return(vm, program);
             }
             else
             {
-                vm->disabledCounter--;
-                vm->statusCode = vm->disabledCounter == 0 ? VM_OK : VM_PAUSED;
+                vm->branches.pop();
+                vm->statusCode = VM_OK;
             }
             break;
         case OP_POP_DISCARD:
@@ -1044,12 +1249,17 @@ Program* SunScript::CreateProgram()
 {
     Program* prog = new Program();
     prog->numFunctions = 0;
+    prog->numLines = 0;
     return prog;
 }
 
 void SunScript::ResetProgram(Program* program)
 {
     program->data.clear();
+    program->functions.clear();
+    program->debug.clear();
+    program->numFunctions = 0;
+    program->numLines = 0;
 }
 
 int SunScript::GetProgram(Program* program, unsigned char** programData)
@@ -1063,6 +1273,18 @@ int SunScript::GetProgram(Program* program, unsigned char** programData)
     std::memcpy(*programData + sizeof(std::int32_t), program->functions.data(), program->functions.size());
     std::memcpy(*programData + program->functions.size() + sizeof(std::int32_t), program->data.data(), program->data.size());
     return (int)program->data.size();
+}
+
+int SunScript::GetDebugData(Program* program, unsigned char** debug)
+{
+    *debug = new unsigned char[program->debug.size() + 4];
+    const int numItems = program->numLines;
+    (*debug)[0] = (unsigned char)(numItems & 0xFF);
+    (*debug)[1] = (unsigned char)((numItems >> 8) & 0xFF);
+    (*debug)[2] = (unsigned char)((numItems >> 16) & 0xFF);
+    (*debug)[3] = (unsigned char)((numItems >> 24) & 0xFF);
+    std::memcpy(&(*debug)[4], program->debug.data(), program->debug.size());
+    return int(program->debug.size() + 4);
 }
 
 void SunScript::ReleaseProgram(Program* program)
@@ -1219,6 +1441,16 @@ void SunScript::EmitIf(Program* program)
     program->data.push_back(OP_IF);
 }
 
+void SunScript::EmitElse(Program* program)
+{
+    program->data.push_back(OP_ELSE);
+}
+
+void SunScript::EmitElseIf(Program* program)
+{
+    program->data.push_back(OP_ELSE_IF);
+}
+
 void SunScript::EmitEndIf(Program* program)
 {
     program->data.push_back(OP_END_IF);
@@ -1232,4 +1464,11 @@ void SunScript::EmitFormat(Program* program)
 void SunScript::EmitDone(Program* program)
 {
     program->data.push_back(OP_DONE);
+}
+
+void SunScript::EmitDebug(Program* program, int line)
+{
+    EmitInt(program->debug, int(program->data.size()));
+    EmitInt(program->debug, line);
+    program->numLines++;
 }

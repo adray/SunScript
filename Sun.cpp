@@ -4,6 +4,9 @@
 #include <vector>
 #include <iostream>
 #include <unordered_map>
+#include <sstream>
+#include <unordered_set>
+#include <stack>
 
 using namespace SunScript;
 
@@ -135,7 +138,7 @@ void Scanner::ScanIdentifier()
     while (scanning)
     {
         char ch = Peek();
-        if (IsLetter(ch))
+        if (IsLetter(ch) || IsDigit(ch))
         {
             identifier += ch;
             Advance();
@@ -492,6 +495,13 @@ public:
     inline Program* GetProgram() { return _program; }
 
 private:
+
+    struct StackFrame
+    {
+        std::unordered_set<std::string> _vars;
+        std::stack<std::unordered_set<std::string>> _scope;
+    };
+
     Token Peek();
     void Advance();
     bool Match(TokenType type);
@@ -500,7 +510,9 @@ private:
     void FreeExpr(Expr* expr);
     void ParseVar();
     void ParseIfStatement();
+    void ParseElse();
     void ParseStatement();
+    void ParseAssignment();
     void ParseFunction();
     void ParseReturn();
     void ParseYield();
@@ -523,9 +535,10 @@ private:
     std::string _errorText;
     int _errorLine;
     Program* _program;
-    int _nesting;
-    bool _inFunction;
     bool _emitCall;
+
+    std::stack<StackFrame> _frames;
+    std::stack<bool> _ifs;  // stack indicating that 'else' clause is added
 };
 
 Parser::Parser(const std::vector<Token>& tokens)
@@ -533,12 +546,12 @@ Parser::Parser(const std::vector<Token>& tokens)
     _scanning(false),
     _pos(0),
     _isError(false),
-    _nesting(0),
-    _inFunction(false),
     _emitCall(false),
     _errorLine(0)
 {
     _program = CreateProgram();
+    _frames.push(StackFrame());
+    _frames.top()._scope.push(std::unordered_set<std::string>());
 }
 
 void Parser::EmitExpr(Expr* expr)
@@ -607,16 +620,19 @@ void Parser::EmitExpr(Expr* expr)
 
             if (call->Yield())
             {
+                EmitDebug(_program, tok.Line());
                 EmitYield(_program, tok.String());
             }
             else
             {
+                EmitDebug(_program, tok.Line());
                 EmitCall(_program, tok.String());
             }
             _emitCall = true;
         }
         else
         {
+            EmitDebug(_program, tok.Line());
             EmitPushLocal(_program, tok.String());
 
             // If we happened to just make a function call, clear the 
@@ -701,7 +717,7 @@ void Parser::ParseYield()
 
 void Parser::ParseReturn()
 {
-    if (_inFunction)
+    if (_frames.size() > 1)
     {
         if (Match(TokenType::RETURN))
         {
@@ -799,7 +815,8 @@ void Parser::ParseFunction()
                 if (Match(TokenType::OPEN_BRACE))
                 {
                     Advance();
-                    _inFunction = true;
+                    _frames.push(StackFrame());
+                    _frames.top()._scope.push(std::unordered_set<std::string>());
                 }
                 else
                 {
@@ -989,7 +1006,8 @@ void Parser::ParseIfStatement()
             EmitIf(_program);
             FreeExpr(expr);
 
-            _nesting++;
+            _ifs.push(false);
+            _frames.top()._scope.push(std::unordered_set<std::string>());
         }
     }
     else
@@ -1015,6 +1033,17 @@ Expr* Parser::ParseExprStatement()
 
 void Parser::ParseStatement()
 {
+    if (Match(TokenType::IDENTIFIER))
+    {
+        Token identifier = Peek();
+        StackFrame& frame = _frames.top();
+        if (frame._vars.find(identifier.String()) != frame._vars.end())
+        {
+            ParseAssignment();
+            return;
+        }
+    }
+
     Expr* expr = ParseExprStatement();
     if (expr)
     {
@@ -1032,36 +1061,23 @@ void Parser::ParseStatement()
     }
 }
 
-void Parser::ParseVar()
+void Parser::ParseAssignment()
 {
-    if (Match(TokenType::IDENTIFIER))
+    Token identifier = Peek();
+    Advance();
+
+    if (Match(TokenType::EQUALS))
     {
-        Token identifier = Peek();
         Advance();
-        if (Match(TokenType::EQUALS))
+        Expr* expr = ParseExpression();
+
+        if (Match(TokenType::SEMICOLON))
         {
+            EmitExpr(expr);
+            EmitPop(_program, identifier.String());
+            FreeExpr(expr);
+
             Advance();
-
-            Expr* expr = ParseExpression();
-
-            if (Match(TokenType::SEMICOLON))
-            {
-                EmitExpr(expr);
-                EmitLocal(_program, identifier.String());
-                EmitPop(_program, identifier.String());
-                FreeExpr(expr);
-
-                Advance();
-            }
-            else
-            {
-                SetError("Unexcepted token.");
-            }
-        }
-        else if (Match(TokenType::SEMICOLON))
-        {
-            Advance();
-            EmitLocal(_program, identifier.String());
         }
         else
         {
@@ -1071,6 +1087,106 @@ void Parser::ParseVar()
     else
     {
         SetError("Unexcepted token.");
+    }
+}
+
+void Parser::ParseVar()
+{
+    if (Match(TokenType::IDENTIFIER))
+    {
+        Token identifier = Peek();
+        Advance();
+
+        StackFrame& top = _frames.top();
+        if (top._vars.find(identifier.String()) == top._vars.end())
+        {
+            if (Match(TokenType::EQUALS))
+            {
+                Advance();
+
+                Expr* expr = ParseExpression();
+
+                if (Match(TokenType::SEMICOLON))
+                {
+                    EmitExpr(expr);
+                    EmitLocal(_program, identifier.String());
+                    EmitPop(_program, identifier.String());
+                    FreeExpr(expr);
+
+                    StackFrame& frame = _frames.top();
+                    frame._vars.insert(identifier.String());
+                    frame._scope.top().insert(identifier.String());
+
+                    Advance();
+                }
+                else
+                {
+                    SetError("Unexcepted token.");
+                }
+            }
+            else if (Match(TokenType::SEMICOLON))
+            {
+                Advance();
+                EmitLocal(_program, identifier.String());
+            }
+            else
+            {
+                SetError("Unexcepted token.");
+            }
+        }
+        else
+        {
+            SetError("Redefinition of variable " + identifier.String());
+        }
+    }
+    else
+    {
+        SetError("Unexcepted token.");
+    }
+}
+
+void Parser::ParseElse()
+{
+    Advance();
+    if (Match(TokenType::ELSE))
+    {
+        Advance();
+        if (!_ifs.top())
+        {
+            if (Match(TokenType::OPEN_BRACE))
+            {
+                Advance();
+
+                // Replace the current value now we are in an else
+                _ifs.pop();
+                _ifs.push(true);
+                _frames.top()._scope.push(std::unordered_set<std::string>());
+
+                EmitElse(_program);
+            }
+            else if (Match(TokenType::IF))
+            {
+                Advance();
+
+                _ifs.pop();
+                EmitElseIf(_program);
+
+                ParseIfStatement();
+            }
+            else
+            {
+                SetError("Unexpected token after ELSE clause.");
+            }
+        }
+        else
+        {
+            SetError("Unexpected else clause");
+        }
+    }
+    else
+    {
+        _ifs.pop();
+        EmitEndIf(_program);
     }
 }
 
@@ -1092,17 +1208,23 @@ void Parser::Parse()
             ParseVar();
             break;
         case TokenType::CLOSE_BRACE:
-            if (_nesting > 0)
+            if (_ifs.size() > 0)
             {
-                _nesting--;
-                Advance();
-                EmitEndIf(_program);
+                auto& top = _frames.top();
+                for (auto& item : top._scope.top())
+                {
+                    top._vars.erase(item);
+                }
+
+                _frames.top()._scope.pop();
+                ParseElse();
             }
-            else if (_inFunction)
+            else if (_frames.size() > 1)
             {
-                _inFunction = false;
                 Advance();
                 EmitEndFunction(_program);
+
+                _frames.pop();
             }
             else
             {
@@ -1124,7 +1246,7 @@ void Parser::Parse()
         }
     }
 
-    if (_nesting != 0)
+    if (_ifs.size() != 0)
     {
         SetError("Expected close brace.");
     }
@@ -1138,6 +1260,11 @@ void Parser::Parse()
 //====================
 
 void SunScript::CompileFile(const std::string& filepath, unsigned char** programData)
+{
+    CompileFile(filepath, programData, nullptr, nullptr);
+}
+
+void SunScript::CompileFile(const std::string& filepath, unsigned char** programData, unsigned char** debugData, std::string* error)
 {
     *programData = nullptr;
 
@@ -1158,20 +1285,34 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
 
         if (scanner.IsError())
         {
-            std::cout << "Error Line: " << scanner.ErrorLine() << " " << scanner.Error() << std::endl;
+            if (error)
+            {
+                std::stringstream ss;
+                ss << "Error Line: " << scanner.ErrorLine() << " " << scanner.Error();
+
+                *error = ss.str();
+            }
         }
         else
         {
             Parser parser(scanner.Tokens());
             parser.Parse();
 
-            if (parser.IsError())
+            if (parser.IsError() && error)
             {
-                std::cout << "Error Line: " << parser.ErrorLine() << " " << parser.Error() << std::endl;
+                std::stringstream ss;
+                ss << "Error Line: " << parser.ErrorLine() << " " << parser.Error();
+
+                *error = ss.str();
             }
             else
             {
                 GetProgram(parser.GetProgram(), programData);
+
+                if (debugData)
+                {
+                    GetDebugData(parser.GetProgram(), debugData);
+                }
             }
         }
     }

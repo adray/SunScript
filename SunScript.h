@@ -7,6 +7,15 @@ namespace SunScript
     struct VirtualMachine;
     struct Program;
 
+    struct Callstack
+    {
+        std::string functionName;
+        int numArgs = 0;
+        int debugLine = 0;
+
+        Callstack* next = nullptr;
+    };
+
     constexpr int VM_OK = 0;
     constexpr int VM_ERROR = 1;
     constexpr int VM_YIELDED = 2;
@@ -15,6 +24,10 @@ namespace SunScript
 
     constexpr int ERR_NONE = 0;
     constexpr int ERR_INTERNAL = 1;
+
+    Callstack* GetCallStack(VirtualMachine* vm);
+    
+    void DestroyCallstack(Callstack* callstack);
 
     VirtualMachine* CreateVirtualMachine();
 
@@ -30,7 +43,11 @@ namespace SunScript
 
     int RunScript(VirtualMachine* vm, unsigned char* program);
 
+    int RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData);
+
     int RunScript(VirtualMachine* vm, unsigned char* program, std::chrono::duration<int, std::nano> timeout);
+
+    int RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData, std::chrono::duration<int, std::nano> timeout);
 
     int ResumeScript(VirtualMachine* vm, unsigned char* program);
 
@@ -49,6 +66,8 @@ namespace SunScript
     void ResetProgram(Program* program);
 
     int GetProgram(Program* program, unsigned char** programData);
+
+    int GetDebugData(Program* program, unsigned char** debug);
 
     void ReleaseProgram(Program* program);
 
@@ -96,9 +115,15 @@ namespace SunScript
 
     void EmitIf(Program* program);
 
+    void EmitElse(Program* program);
+
+    void EmitElseIf(Program* program);
+
     void EmitEndIf(Program* program);
     
     void EmitFormat(Program* program);
 
     void EmitDone(Program* program);
+
+    void EmitDebug(Program* program, int line);
 }
