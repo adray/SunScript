@@ -7,6 +7,7 @@
 #include <sstream>
 #include <unordered_set>
 #include <stack>
+#include <filesystem>
 
 using namespace SunScript;
 
@@ -1259,14 +1260,9 @@ void Parser::Parse()
 
 //====================
 
-void SunScript::CompileFile(const std::string& filepath, unsigned char** programData)
+static SunScript::Program* CompileFile2(const std::string& filepath, std::string* error)
 {
-    CompileFile(filepath, programData, nullptr, nullptr);
-}
-
-void SunScript::CompileFile(const std::string& filepath, unsigned char** programData, unsigned char** debugData, std::string* error)
-{
-    *programData = nullptr;
+    SunScript::Program* program = nullptr;
 
     std::ifstream stream;
     stream.open(filepath);
@@ -1307,13 +1303,145 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
             }
             else
             {
-                GetProgram(parser.GetProgram(), programData);
-
-                if (debugData)
-                {
-                    GetDebugData(parser.GetProgram(), debugData);
-                }
+                program = parser.GetProgram();
             }
         }
     }
+    else
+    {
+        std::stringstream ss;
+        ss << "File not found.";
+
+        *error = ss.str();
+    }
+
+    return program;
 }
+
+void SunScript::CompileFile(const std::string& filepath, unsigned char** programData)
+{
+    CompileFile(filepath, programData, nullptr, nullptr);
+}
+
+void SunScript::CompileFile(const std::string& filepath, unsigned char** programData, unsigned char** debugData, std::string* error)
+{
+    Program* program = CompileFile2(filepath, error);
+
+    *programData = nullptr;
+
+    GetProgram(program, programData);
+
+    if (debugData)
+    {
+        GetDebugData(program, debugData);
+    }
+}
+
+//==========================
+// Sun compilier
+//==========================
+
+#ifdef _SUN_EXECUTABLE_
+#include <iostream>
+    static void PrintHelp()
+    {
+        std::cout << "Usage:" << std::endl;
+        std::cout << "Sun build <file1> <file2>..." << std::endl;
+        std::cout << "Sun disassemble <file1>" << std::endl;
+    }
+
+    static void Build(int numFiles, char** files)
+    {
+        for (int i = 0; i < numFiles; i++)
+        {
+            std::string filename = files[i];
+            std::cout << "[" << filename << "] ";
+
+            std::string error;
+            
+            Program* program = CompileFile2(filename, &error);
+            if (program)
+            {
+                unsigned char* programData;
+                unsigned char* debugData;
+                const int versionNumber = 0;
+                const int programDataSize = GetProgram(program, &programData);
+                const int debugDataSize   = GetDebugData(program, &debugData);
+
+                std::filesystem::path path = filename;
+                path.replace_extension("obj");
+
+                std::ofstream ss;
+                ss.open(path, std::ios::binary | std::ios::trunc);
+                ss.write((char*)&versionNumber, sizeof(int));
+                ss.write((char*)&programDataSize, sizeof(int));
+                ss.write((char*)programData, programDataSize);
+                ss.write((char*)&debugDataSize, sizeof(int));
+                ss.write((char*)debugData, debugDataSize);
+                ss.close();
+
+                std::cout << "Script built successfully" << std::endl;
+            }
+            else
+            {
+                std::cout << "Failed to compile script: " << error << std::endl;
+            }
+        }
+    }
+
+    static void DisassembleProgram(const std::string& file)
+    {
+        unsigned char* program;
+        LoadScript(file, &program);
+        std::cout << "Script loaded" << std::endl;
+        if (program)
+        {
+            std::stringstream ss;
+            Disassemble(ss, program, nullptr);
+            std::cout << ss.str();
+
+            delete[] program;
+        }
+        else
+        {
+            std::cout << "Failed to load program." << std::endl;
+        }
+    }
+
+    int main(int numArgs, char** args)
+    {
+        if (numArgs <= 1)
+        {
+            PrintHelp();
+        }
+        else
+        {
+            std::cout << "SunScript Compiler" << std::endl;
+
+            std::string cmd = args[1];
+            if (cmd == "build")
+            {
+                Build(numArgs - 2, args + 2);
+            }
+            else if (cmd == "disassemble")
+            {
+                if (numArgs <= 2)
+                {
+                    std::cout << "No program data specified." << std::endl;
+                }
+                else
+                {
+                    DisassembleProgram(args[2]);
+                }
+            }
+            else
+            {
+                std::cout << "Invalid command." << std::endl;
+            }
+        }
+        
+        return 0;
+    }
+#endif
+
+//=====================

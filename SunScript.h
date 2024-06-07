@@ -71,6 +71,8 @@ namespace SunScript
 
     void ReleaseProgram(Program* program);
 
+    void Disassemble(std::stringstream& ss, unsigned char* programData, unsigned char* debugData);
+
     void EmitReturn(Program* program);
 
     void EmitBeginFunction(Program* program, const std::string& name, int numArgs);

@@ -176,16 +176,13 @@ int SunScript::LoadScript(const std::string& filepath, unsigned char** program)
     if (stream.good())
     {
         int version;
-        stream >> version;
+        stream.read((char*)&version, sizeof(int));
         if (version == 0)
         {
             int size;
-            stream >> size;
+            stream.read((char*)&size, sizeof(int));
             *program = new unsigned char[size];
             stream.read((char*)*program, size);
-        }
-        else
-        {
             return 1;
         }
     }
@@ -1264,7 +1261,8 @@ void SunScript::ResetProgram(Program* program)
 
 int SunScript::GetProgram(Program* program, unsigned char** programData)
 {
-    *programData = new unsigned char[program->data.size() + program->functions.size() + sizeof(std::int32_t)];
+    const int size = int(program->data.size() + program->functions.size() + sizeof(std::int32_t));
+    *programData = new unsigned char[size];
     const int numFunctions = program->numFunctions;
     (*programData)[0] = (unsigned char)(numFunctions & 0xFF);
     (*programData)[1] = (unsigned char)((numFunctions >> 8) & 0xFF);
@@ -1272,7 +1270,7 @@ int SunScript::GetProgram(Program* program, unsigned char** programData)
     (*programData)[3] = (unsigned char)((numFunctions >> 24) & 0xFF);
     std::memcpy(*programData + sizeof(std::int32_t), program->functions.data(), program->functions.size());
     std::memcpy(*programData + program->functions.size() + sizeof(std::int32_t), program->data.data(), program->data.size());
-    return (int)program->data.size();
+    return size;
 }
 
 int SunScript::GetDebugData(Program* program, unsigned char** debug)
@@ -1290,6 +1288,126 @@ int SunScript::GetDebugData(Program* program, unsigned char** debug)
 void SunScript::ReleaseProgram(Program* program)
 {
     delete program;
+}
+
+void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, unsigned char* debugData)
+{
+    VirtualMachine* vm = CreateVirtualMachine();
+    ResetVM(vm);
+
+    ScanFunctions(vm, programData);
+    ScanDebugData(vm, debugData);
+    vm->running = true;
+
+    while (vm->running)
+    {
+        const char op = programData[vm->programCounter++];
+
+        switch (op)
+        {
+        case OP_BEGIN_FUNCTION:
+            ss << "OP_BEGIN_FUNCTION" << std::endl;
+            break;
+        case OP_END_FUNCTION:
+            ss << "OP_END_FUNCTION" << std::endl;
+            break;
+        case OP_ADD:
+            ss << "OP_ADD" << std::endl;
+            break;
+        case OP_SUB:
+            ss << "OP_SUB" << std::endl;
+            break;
+        case OP_MUL:
+            ss << "OP_MUL" << std::endl;
+            break;
+        case OP_DIV:
+            ss << "OP_DIV" << std::endl;
+            break;
+        case OP_ELSE:
+            ss << "OP_ELSE" << std::endl;
+            break;
+        case OP_ELSE_IF:
+            ss << "OP_ELSE_IF" << std::endl;
+            break;
+        case OP_END_IF:
+            ss << "OP_END_IF" << std::endl;
+            break;
+        case OP_EQUALS:
+            ss << "OP_EQUALS" << std::endl;
+            break;
+        case OP_FORMAT:
+            ss << "OP_FORMAT" << std::endl;
+            break;
+        case OP_GREATER_THAN:
+            ss << "OP_GREATER_THAN" << std::endl;
+            break;
+        case OP_IF:
+            ss << "OP_IF" << std::endl;
+            break;
+        case OP_LESS_THAN:
+            ss << "OP_LESS_THAN" << std::endl;
+            break;
+        case OP_LOCAL:
+            ss << "OP_LOCAL " << Read_String(programData, &vm->programCounter) << std::endl;
+            break;
+        case OP_LOOP:
+            ss << "OP_LOOP" << std::endl;
+            break;
+        case OP_NOT_EQUALS:
+            ss << "OP_NOT_EQUALS" << std::endl;
+            break;
+        case OP_POP:
+            ss << "OP_POP " << Read_String(programData, &vm->programCounter) << std::endl;
+            break;
+        case OP_POP_DISCARD:
+            ss << "OP_POP_DISCARD" << std::endl;
+            break;
+        case OP_PUSH:
+        {
+            const unsigned char ty = programData[vm->programCounter++];
+            if (ty == TY_INT)
+            {
+                ss << "OP_PUSH " << Read_Int(programData, &vm->programCounter) << std::endl;
+            }
+            else if (ty == TY_STRING)
+            {
+                ss << "OP_PUSH \"" << Read_String(programData, &vm->programCounter) << "\"" << std::endl;
+            }
+        }
+            break;
+        case OP_PUSH_LOCAL:
+            ss << "OP_PUSH_LOCAL " << Read_String(programData, &vm->programCounter) << std::endl;
+            break;
+        case OP_RETURN:
+            ss << "OP_RETURN" << std::endl;
+            break;
+        case OP_SET:
+        {
+            const unsigned char ty = programData[vm->programCounter++];
+            if (ty == TY_INT)
+            {
+                ss << "OP_SET " << Read_String(programData, &vm->programCounter) << " " << Read_Int(programData, &vm->programCounter) << std::endl;
+            }
+            else if (ty == TY_STRING)
+            {
+                ss << "OP_SET " << Read_String(programData, &vm->programCounter) << " \"" << Read_String(programData, &vm->programCounter) << "\"" << std::endl;
+            }
+        }
+            break;
+        case OP_YIELD:
+            ss << "OP_YIELD " << Read_String(programData, &vm->programCounter) << std::endl;
+            break;
+        case OP_CALL:
+            ss << "OP_CALL " << Read_String(programData, &vm->programCounter) << std::endl;
+            break;
+        case OP_DONE:
+            ss << "OP_DONE" << std::endl;
+            vm->running = false;
+            break;
+        }
+    }
+    
+    ShutdownVirtualMachine(vm);
 }
 
 static void EmitInt(std::vector<unsigned char>& data, const int value)
