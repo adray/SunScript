@@ -12,6 +12,7 @@ namespace SunScript
         std::string functionName;
         int numArgs = 0;
         int debugLine = 0;
+        int programCounter = 0;
 
         Callstack* next = nullptr;
     };

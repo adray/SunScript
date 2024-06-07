@@ -114,6 +114,7 @@ Callstack* SunScript::GetCallStack(VirtualMachine* vm)
     Callstack* tail = stack;
     std::stack<StackFrame> frames(vm->frames);
 
+    int pc = vm->programCounter;
     int debugLine = vm->debugLine;
     while (frames.size() > 0)
     {
@@ -121,9 +122,11 @@ Callstack* SunScript::GetCallStack(VirtualMachine* vm)
         tail->functionName = frame.functionName;
         tail->numArgs = vm->functions[frame.functionName].numArgs;
         tail->debugLine = debugLine;
+        tail->programCounter = pc;
         
         frames.pop();
         debugLine = frame.debugLine;
+        pc = frame.returnAddress;
         tail->next = new Callstack();
         tail = tail->next;
     }
@@ -131,6 +134,7 @@ Callstack* SunScript::GetCallStack(VirtualMachine* vm)
     tail->functionName = "main";
     tail->numArgs = 0;
     tail->debugLine = debugLine;
+    tail->programCounter = pc;
 
     return stack;
 }
@@ -761,6 +765,15 @@ static void Op_Else_If(VirtualMachine* vm, unsigned char* program)
 
         vm->branches.pop();
         br &= ~BR_DISABLED;
+        br |= BR_ELSE_IF;
+        vm->branches.push(br);
+    }
+    else if ((br & BR_FROZEN) == BR_FROZEN)
+    {
+        // Otherwise we just need to add the ELSE IF flag.
+        vm->statusCode = VM_OK;
+
+        vm->branches.pop();
         br |= BR_ELSE_IF;
         vm->branches.push(br);
     }
