@@ -24,7 +24,7 @@ void Handler(VirtualMachine* vm)
     }
 }
 
-void SunScript::Demo(int _42)
+void SunScript::Demo1(int _42)
 {
     auto _program = CreateProgram();
 
@@ -52,6 +52,34 @@ void SunScript::Demo(int _42)
     SetHandler(vm, Handler);
     RunScript(vm, programData);
     
+    delete[] programData;
+    ShutdownVirtualMachine(vm);
+    ReleaseProgram(_program);
+}
+
+void SunScript::Demo2()
+{
+    auto _program = CreateProgram();
+
+    SunScript::EmitPush(_program, 11);
+    SunScript::EmitPush(_program, 11);
+    SunScript::EmitEquals(_program);
+    SunScript::EmitPush(_program, "Hello");
+    SunScript::EmitPush(_program, "Hello");
+    SunScript::EmitEquals(_program);
+    SunScript::EmitAnd(_program);
+    SunScript::EmitIf(_program);
+    SunScript::EmitPush(_program, "11 == 11 && \"Hello\" == \"Hello\"");
+    SunScript::EmitCall(_program, "Print");
+    SunScript::EmitDone(_program);
+
+    unsigned char* programData;
+    GetProgram(_program, &programData);
+
+    VirtualMachine* vm = CreateVirtualMachine();
+    SetHandler(vm, Handler);
+    RunScript(vm, programData);
+
     delete[] programData;
     ShutdownVirtualMachine(vm);
     ReleaseProgram(_program);

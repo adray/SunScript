@@ -17,6 +17,9 @@ constexpr unsigned char OP_IF = 0x6;
 constexpr unsigned char OP_LOOP = 0x7;
 constexpr unsigned char OP_DONE = 0x8;
 constexpr unsigned char OP_PUSH_LOCAL = 0x9;
+constexpr unsigned char OP_OR = 0xa;
+constexpr unsigned char OP_AND = 0xb;
+
 constexpr unsigned char OP_ADD = 0x10;
 constexpr unsigned char OP_SUB = 0x1a;
 constexpr unsigned char OP_MUL = 0x1b;
@@ -333,6 +336,84 @@ static void Op_Compare(unsigned char op, VirtualMachine* vm, unsigned char* prog
         v.type = TY_INT;
         vm->stack.push(v);
         vm->integers.push_back(result ? 1 : 0);
+    }
+}
+
+static void Op_Or(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->statusCode != VM_OK)
+    {
+        return;
+    }
+
+    if (vm->stack.size() < 2)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    Value var1 = vm->stack.top();
+    vm->stack.pop();
+    Value var2 = vm->stack.top();
+    vm->stack.pop();
+
+    if (var1.type != TY_INT || var2.type != TY_INT)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    bool result = (vm->integers[var1.index] == 1 || vm->integers[var2.index] == 1);
+    
+    Value v = {};
+    v.index = (unsigned int)vm->integers.size();
+    v.type = TY_INT;
+    vm->stack.push(v);
+    vm->integers.push_back(result ? 1 : 0);
+}
+
+static void Op_And(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->statusCode != VM_OK)
+    {
+        return;
+    }
+
+    if (vm->stack.size() < 2)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    Value var1 = vm->stack.top();
+    vm->stack.pop();
+    Value var2 = vm->stack.top();
+    vm->stack.pop();
+
+    if (var1.type != TY_INT || var2.type != TY_INT)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    if (vm->integers[var1.index] == 1 && vm->integers[var2.index] == 1)
+    {
+        Value v = {};
+        v.index = var1.index;
+        v.type = TY_INT;
+        vm->stack.push(v);
+    }
+    else
+    {
+        Value v = {};
+        v.index = (unsigned int)vm->integers.size();
+        v.type = TY_INT;
+        vm->stack.push(v);
+        vm->integers.push_back(0);
     }
 }
 
@@ -1142,6 +1223,12 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
         case OP_DIV:
             Op_Operator(op, vm, program);
             break;
+        case OP_AND:
+            Op_And(vm, program);
+            break;
+        case OP_OR:
+            Op_Or(vm, program);
+            break;
         case OP_IF:
             Op_If(vm, program);
             break;
@@ -1310,6 +1397,12 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             break;
         case OP_END_FUNCTION:
             ss << "OP_END_FUNCTION" << std::endl;
+            break;
+        case OP_AND:
+            ss << "OP_AND" << std::endl;
+            break;
+        case OP_OR:
+            ss << "OP_OR" << std::endl;
             break;
         case OP_ADD:
             ss << "OP_ADD" << std::endl;
@@ -1552,6 +1645,16 @@ void SunScript::EmitGreaterThan(Program* program)
 void SunScript::EmitLessThan(Program* program)
 {
     program->data.push_back(OP_LESS_THAN);
+}
+
+void SunScript::EmitAnd(Program* program)
+{
+    program->data.push_back(OP_AND);
+}
+
+void SunScript::EmitOr(Program* program)
+{
+    program->data.push_back(OP_OR);
 }
 
 void SunScript::EmitIf(Program* program)

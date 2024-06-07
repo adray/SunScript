@@ -5,11 +5,14 @@ statement      - exprStmt ;
 exprStmt       - expression ";"
                  | ifStmt 
                  | function
-                 | yield;
+                 | yield
+                 ;
 
-ifSrmt         - "if" "(" equality ")" "{" (statement*) "}"
+ifSrmt         - "if" "(" expression ")" "{" (statement*) "}" ( "else" ( ifStmt | "{" statement* "}" ) )? ;
 
-expression     - equality ;
+expression     - logicalOr ;
+logicalOr      - logicalAnd ( "||" logicalAnd )* ;
+logicalAnd     - equality ( "&&" equality )* ;
 equality       - comparison ( ( "!=" | "==" ) comparison )* ;
 comparison     - term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
 term           - factor ( ( "-" | "+" ) factor )* ;
@@ -20,7 +23,7 @@ primary        - NUMBER | STRING | "true" | "false" | "nil"
                | "(" expression ")" ;
 call           - primary "(" argument? ")" ;
 argument       - expression ( "," expression )* ;
-function       - "function" identifier "(" parameter? ")" "{" (statement*) "}";
+function       - "function" identifier "(" parameter? ")" "{" (statement*) "}" ;
 parameter      - identifier ( "," identifier )* ;
 return         - "return" expression ;
 yield          - "yield" call ;

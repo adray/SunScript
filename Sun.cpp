@@ -376,6 +376,30 @@ void Scanner::ScanLine(const std::string& line)
                 Advance();
                 ScanStringLiteral();
                 break;
+            case '&':
+                Advance();
+                if (Peek() == '&')
+                {
+                    AddToken(TokenType::AND);
+                    Advance();
+                }
+                else
+                {
+                    SetError("Bitwise AND not supported.");
+                }
+                break;
+            case '|':
+                Advance();
+                if (Peek() == '|')
+                {
+                    AddToken(TokenType::OR);
+                    Advance();
+                }
+                else
+                {
+                    SetError("Bitwise OR not supported.");
+                }
+                break;
             default:
                 if (IsDigit(ch))
                 {
@@ -521,6 +545,8 @@ private:
     Expr* ParseExprStatement();
     Expr* ParseExpression();
     Expr* ParseEquality();
+    Expr* ParseLogicalAnd();
+    Expr* ParseLogicalOr();
     Expr* ParseComparision();
     Expr* ParseTerm();
     Expr* ParseFactor();
@@ -603,6 +629,12 @@ void Parser::EmitExpr(Expr* expr)
     case TokenType::LESS:
         EmitLessThan(_program);
         break;
+    case TokenType::OR:
+        EmitOr(_program);
+        break;
+    case TokenType::AND:
+        EmitAnd(_program);
+        break;
     case TokenType::STRING:
         EmitPush(_program, tok.String());
         break;
@@ -642,7 +674,7 @@ void Parser::EmitExpr(Expr* expr)
         }
         break;
     default:
-        SetError("Unexpected token emitting expression.");
+        SetError("Unexpected token '" + tok.String() + "' emitting expression.");
         break;
     }
 }
@@ -948,6 +980,34 @@ Expr* Parser::ParseTerm()
     return expr;
 }
 
+Expr* Parser::ParseLogicalAnd()
+{
+    Expr* expr = ParseEquality();
+
+    while (Match(TokenType::AND))
+    {
+        Token op = Peek();
+        Advance();
+        expr = new Expr(expr, ParseEquality(), op);
+    }
+
+    return expr;
+}
+
+Expr* Parser::ParseLogicalOr()
+{
+    Expr* expr = ParseLogicalAnd();
+
+    while (Match(TokenType::OR))
+    {
+        Token op = Peek();
+        Advance();
+        expr = new Expr(expr, ParseLogicalAnd(), op);
+    }
+
+    return expr;
+}
+
 Expr* Parser::ParseComparision()
 {
     Expr* expr = ParseTerm();
@@ -978,7 +1038,7 @@ Expr* Parser::ParseEquality()
 
 Expr* Parser::ParseExpression()
 {
-    return ParseEquality();
+    return ParseLogicalOr();
 }
 
 void Parser::ParseIfStatement()
@@ -988,7 +1048,7 @@ void Parser::ParseIfStatement()
     {
         Token token = Peek();
         Advance();
-        expr = ParseEquality();
+        expr = ParseExpression();
 
         if (Match(TokenType::CLOSE_PARAN))
         {
@@ -1343,6 +1403,7 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
 
 #ifdef _SUN_EXECUTABLE_
 #include <iostream>
+#include "SunScriptDemo.h"
     static void PrintHelp()
     {
         std::cout << "Usage:" << std::endl;
@@ -1433,6 +1494,11 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
                 {
                     DisassembleProgram(args[2]);
                 }
+            }
+            else if (cmd == "demo")
+            {
+                std::cout << "Running Demo2()" << std::endl;
+                SunScript::Demo2();
             }
             else
             {
