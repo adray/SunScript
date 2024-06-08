@@ -45,6 +45,7 @@ enum class TokenType
     VAR,
     YIELD,
     RETURN,
+    WHILE,
 
     // Literals
 
@@ -120,6 +121,7 @@ Scanner::Scanner()
     AddKeyword("var", TokenType::VAR);
     AddKeyword("yield", TokenType::YIELD);
     AddKeyword("return", TokenType::RETURN);
+    AddKeyword("while", TokenType::WHILE);
 }
 
 void Scanner::AddKeyword(const std::string& keyword, TokenType token)
@@ -534,6 +536,7 @@ private:
     void EmitExpr(Expr* expr);
     void FreeExpr(Expr* expr);
     void ParseVar();
+    void ParseWhile();
     void ParseIfStatement();
     void ParseElse();
     void ParseStatement();
@@ -565,8 +568,12 @@ private:
     bool _emitCall;
 
     std::stack<StackFrame> _frames;
-    std::stack<bool> _ifs;  // stack indicating that 'else' clause is added
+    std::stack<int> _stack;  
 };
+
+constexpr int ST_IF = 0x0;
+constexpr int ST_ELSE = 0x1; // stack indicating that 'else' clause is added
+constexpr int ST_WHILE = 0x2;
 
 Parser::Parser(const std::vector<Token>& tokens)
     : _tokens(tokens),
@@ -1067,7 +1074,7 @@ void Parser::ParseIfStatement()
             EmitIf(_program);
             FreeExpr(expr);
 
-            _ifs.push(false);
+            _stack.push(ST_IF);
             _frames.top()._scope.push(std::unordered_set<std::string>());
         }
     }
@@ -1212,15 +1219,15 @@ void Parser::ParseElse()
     if (Match(TokenType::ELSE))
     {
         Advance();
-        if (!_ifs.top())
+        if (!_stack.top())
         {
             if (Match(TokenType::OPEN_BRACE))
             {
                 Advance();
 
                 // Replace the current value now we are in an else
-                _ifs.pop();
-                _ifs.push(true);
+                _stack.pop();
+                _stack.push(ST_ELSE);
                 _frames.top()._scope.push(std::unordered_set<std::string>());
 
                 EmitElse(_program);
@@ -1229,7 +1236,7 @@ void Parser::ParseElse()
             {
                 Advance();
 
-                _ifs.pop();
+                _stack.pop();
                 EmitElseIf(_program);
 
                 ParseIfStatement();
@@ -1246,8 +1253,46 @@ void Parser::ParseElse()
     }
     else
     {
-        _ifs.pop();
+        _stack.pop();
         EmitEndIf(_program);
+    }
+}
+
+void Parser::ParseWhile()
+{
+    EmitLoop(_program);
+
+    Expr* expr = nullptr;
+    if (Match(TokenType::OPEN_PARAN))
+    {
+        Token token = Peek();
+        Advance();
+        expr = ParseExpression();
+
+        if (Match(TokenType::CLOSE_PARAN))
+        {
+            Advance();
+        }
+        else
+        {
+            SetError("Unexcepted token.");
+        }
+
+        if (!IsError() && Match(TokenType::OPEN_BRACE))
+        {
+            Advance();
+
+            EmitExpr(expr);
+            EmitIf(_program);
+            FreeExpr(expr);
+
+            _stack.push(ST_WHILE);
+            _frames.top()._scope.push(std::unordered_set<std::string>());
+        }
+    }
+    else
+    {
+        SetError("Unexcepted token.");
     }
 }
 
@@ -1260,6 +1305,10 @@ void Parser::Parse()
         Token token = Peek();
         switch (token.Type())
         {
+        case TokenType::WHILE:
+            Advance();
+            ParseWhile();
+            break;
         case TokenType::IF:
             Advance();
             ParseIfStatement();
@@ -1269,16 +1318,36 @@ void Parser::Parse()
             ParseVar();
             break;
         case TokenType::CLOSE_BRACE:
-            if (_ifs.size() > 0)
+            if (_stack.size() > 0)
             {
-                auto& top = _frames.top();
-                for (auto& item : top._scope.top())
-                {
-                    top._vars.erase(item);
-                }
+                const int val = _stack.top();
 
-                _frames.top()._scope.pop();
-                ParseElse();
+                if (val == ST_IF || val == ST_ELSE)
+                {
+                    auto& top = _frames.top();
+                    for (auto& item : top._scope.top())
+                    {
+                        top._vars.erase(item);
+                    }
+
+                    _frames.top()._scope.pop();
+                    ParseElse();
+                }
+                else if (val == ST_WHILE)
+                {
+                    // while loop?
+                    auto& top = _frames.top();
+                    for (auto& item : top._scope.top())
+                    {
+                        top._vars.erase(item);
+                    }
+
+                    _frames.top()._scope.pop();
+                    _stack.pop();
+
+                    Advance();
+                    EmitEndLoop(_program);
+                }
             }
             else if (_frames.size() > 1)
             {
@@ -1307,7 +1376,7 @@ void Parser::Parse()
         }
     }
 
-    if (_ifs.size() != 0)
+    if (_stack.size() != 0)
     {
         SetError("Expected close brace.");
     }
@@ -1497,8 +1566,25 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
             }
             else if (cmd == "demo")
             {
+                std::cout << "Demos:" << std::endl;
+                std::cout << "sun demo1" << std::endl;
+                std::cout << "sun demo2" << std::endl;
+                std::cout << "sun demo3" << std::endl;
+            }
+            else if (cmd == "demo1")
+            {
+                std::cout << "Running Demo1()" << std::endl;
+                SunScript::Demo1(42);
+            }
+            else if (cmd == "demo2")
+            {
                 std::cout << "Running Demo2()" << std::endl;
                 SunScript::Demo2();
+            }
+            else if (cmd == "demo3")
+            {
+                std::cout << "Running Demo3()" << std::endl;
+                SunScript::Demo3();
             }
             else
             {

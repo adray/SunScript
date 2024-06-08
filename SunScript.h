@@ -128,6 +128,10 @@ namespace SunScript
 
     void EmitEndIf(Program* program);
     
+    void EmitLoop(Program* program);
+
+    void EmitEndLoop(Program* program);
+
     void EmitFormat(Program* program);
 
     void EmitDone(Program* program);

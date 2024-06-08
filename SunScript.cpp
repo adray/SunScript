@@ -19,6 +19,7 @@ constexpr unsigned char OP_DONE = 0x8;
 constexpr unsigned char OP_PUSH_LOCAL = 0x9;
 constexpr unsigned char OP_OR = 0xa;
 constexpr unsigned char OP_AND = 0xb;
+constexpr unsigned char OP_LOOP_END = 0xc;
 
 constexpr unsigned char OP_ADD = 0x10;
 constexpr unsigned char OP_SUB = 0x1a;
@@ -87,6 +88,7 @@ namespace SunScript
         int debugLine;
         std::string callName;
         std::stack<int> branches;
+        std::stack<int> loops;
         std::stack<StackFrame> frames;
         std::stack<Value> stack;
         std::unordered_map<int, int> debugLines;
@@ -807,6 +809,31 @@ static void Op_EndIf(VirtualMachine* vm, unsigned char* program)
     }
 }
 
+static void Op_Loop(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->statusCode == VM_OK)
+    {
+        // Loop should continue directly after this instruction.
+        vm->loops.push(vm->programCounter);
+    }
+}
+
+static void Op_Loop_End(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->statusCode == VM_OK)
+    {
+        // Jump to loop address
+        const int addr = vm->loops.top();
+        vm->programCounter = addr;
+        vm->branches.pop();
+    }
+    else if (vm->statusCode == VM_PAUSED)
+    {
+        vm->loops.pop();
+        Op_EndIf(vm, program);
+    }
+}
+
 static void Op_Pop_Discard(VirtualMachine* vm, unsigned char* program)
 {
     if (vm->statusCode == VM_OK && vm->stack.size() > 0)
@@ -1254,6 +1281,12 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
         case OP_END_IF:
             Op_EndIf(vm, program);
             break;
+        case OP_LOOP:
+            Op_Loop(vm, program);
+            break;
+        case OP_LOOP_END:
+            Op_Loop_End(vm, program);
+            break;
         case OP_FORMAT:
             Op_Format(vm, program);
             break;
@@ -1458,6 +1491,9 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             break;
         case OP_LOOP:
             ss << "OP_LOOP" << std::endl;
+            break;
+        case OP_LOOP_END:
+            ss << "OP_LOOP_END" << std::endl;
             break;
         case OP_NOT_EQUALS:
             ss << "OP_NOT_EQUALS" << std::endl;
@@ -1693,6 +1729,16 @@ void SunScript::EmitEndIf(Program* program)
 void SunScript::EmitFormat(Program* program)
 {
     program->data.push_back(OP_FORMAT);
+}
+
+void SunScript::EmitLoop(Program* program)
+{
+    program->data.push_back(OP_LOOP);
+}
+
+void SunScript::EmitEndLoop(Program* program)
+{
+    program->data.push_back(OP_LOOP_END);
 }
 
 void SunScript::EmitDone(Program* program)

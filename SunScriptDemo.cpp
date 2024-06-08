@@ -84,3 +84,35 @@ void SunScript::Demo2()
     ShutdownVirtualMachine(vm);
     ReleaseProgram(_program);
 }
+
+void SunScript::Demo3()
+{
+    auto _program = CreateProgram();
+
+    SunScript::EmitLocal(_program, "x");
+    SunScript::EmitSet(_program, "x", 0);
+    SunScript::EmitLoop(_program);
+    SunScript::EmitPush(_program, 10);
+    SunScript::EmitPushLocal(_program, "x");
+    SunScript::EmitLessThan(_program);
+    SunScript::EmitIf(_program);
+    SunScript::EmitPushLocal(_program, "x");
+    SunScript::EmitPush(_program, 1);
+    SunScript::EmitAdd(_program);
+    SunScript::EmitPop(_program, "x");
+    SunScript::EmitPushLocal(_program, "x");
+    SunScript::EmitCall(_program, "Print");
+    SunScript::EmitEndLoop(_program);
+    SunScript::EmitDone(_program);
+
+    unsigned char* programData;
+    GetProgram(_program, &programData);
+
+    VirtualMachine* vm = CreateVirtualMachine();
+    SetHandler(vm, Handler);
+    RunScript(vm, programData);
+
+    delete[] programData;
+    ShutdownVirtualMachine(vm);
+    ReleaseProgram(_program);
+}

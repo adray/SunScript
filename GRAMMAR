@@ -3,12 +3,14 @@ program        - statement* EOF ;
 statement      - exprStmt ;
 
 exprStmt       - expression ";"
+                 | whileStmt
                  | ifStmt 
                  | function
                  | yield
                  ;
 
 ifSrmt         - "if" "(" expression ")" "{" (statement*) "}" ( "else" ( ifStmt | "{" statement* "}" ) )? ;
+whileStmt      - "while" "(" expression ")" "{" statement* "}" ;
 
 expression     - logicalOr ;
 logicalOr      - logicalAnd ( "||" logicalAnd )* ;
