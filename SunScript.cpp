@@ -696,18 +696,22 @@ static void Op_If(VirtualMachine* vm, unsigned char* program)
     }
     else if (vm->statusCode == VM_PAUSED)
     {
-        int nbr = BR_FROZEN | BR_DISABLED;
         if (vm->branches.size() > 0)
         {
+            int nbr = BR_FROZEN | BR_DISABLED;
             const int br = vm->branches.top();
             if ((br & BR_ELSE_IF) == BR_ELSE_IF)
             {
                 vm->branches.pop();
-                nbr |= br & BR_EXECUTED;
+                nbr = br;
+                nbr &= ~BR_ELSE_IF;
             }
+            vm->branches.push(nbr);
         }
-
-        vm->branches.push(nbr);
+        else
+        {
+            vm->branches.push(BR_FROZEN | BR_DISABLED);
+        }
     }
 }
 
@@ -730,7 +734,7 @@ static void Op_Else(VirtualMachine* vm, unsigned char* program)
         br |= BR_DISABLED;
         vm->branches.push(br);
     }
-    else if ((br & BR_FROZEN) == BR_EMPTY)
+    else if (br == BR_DISABLED)
     {
         // Otherwise we should execute the ELSE clause.
         vm->statusCode = VM_OK;
@@ -760,7 +764,7 @@ static void Op_Else_If(VirtualMachine* vm, unsigned char* program)
         br |= BR_DISABLED | BR_ELSE_IF;
         vm->branches.push(br);
     }
-    else if ((br & BR_FROZEN) == BR_EMPTY)
+    else if (br == BR_DISABLED)
     {
         // Otherwise we should execute the ELSE IF expression (and possibly the ELSE IF clause).
         vm->statusCode = VM_OK;
@@ -772,9 +776,7 @@ static void Op_Else_If(VirtualMachine* vm, unsigned char* program)
     }
     else if ((br & BR_FROZEN) == BR_FROZEN)
     {
-        // Otherwise we just need to add the ELSE IF flag.
-        vm->statusCode = VM_OK;
-
+        // We need to a the ELSE IF flag.
         vm->branches.pop();
         br |= BR_ELSE_IF;
         vm->branches.push(br);
@@ -1242,6 +1244,11 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
         case OP_DONE:
             if (vm->statusCode == VM_OK)
             {
+                vm->running = false;
+            }
+            else
+            {
+                vm->statusCode = VM_ERROR;
                 vm->running = false;
             }
             break;
