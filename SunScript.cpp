@@ -1439,8 +1439,28 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
     ScanDebugData(vm, debugData);
     vm->running = true;
 
+    ss << "======================" << std::endl;
+    ss << "Functions" << std::endl;
+    ss << "======================" << std::endl;
+    if (vm->functions.size() > 0)
+    {
+        for (auto& func : vm->functions)
+        {
+            ss << (func.second.offset + vm->programOffset) << " " << func.first << "(" << func.second.numArgs << ")" << std::endl;
+        }
+    }
+    else
+    {
+        ss << "No functions" << std::endl;
+    }
+
+    ss << "======================" << std::endl;
+    ss << "Program" << std::endl;
+    ss << "======================" << std::endl;
     while (vm->running)
     {
+        ss << vm->programCounter << " ";
+        
         const char op = programData[vm->programCounter++];
 
         switch (op)
