@@ -1126,8 +1126,12 @@ static void ResetVM(VirtualMachine* vm)
     vm->strings.clear();
     vm->locals.clear();
     vm->debugLines.clear();
+    vm->functions.clear();
     while (!vm->branches.empty()) {
         vm->branches.pop();
+    }
+    while (!vm->loops.empty()) {
+        vm->loops.pop();
     }
 }
 
