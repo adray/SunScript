@@ -65,6 +65,7 @@ namespace SunScript
         std::unordered_map<std::string, Value> locals;
         std::vector<std::string> strings;
         std::vector<int> integers;
+        std::stack<int> loops;
     };
 
     struct Function
@@ -543,6 +544,7 @@ static void Op_Return(VirtualMachine* vm, unsigned char* program)
         vm->integers = frame.integers;
         vm->strings = frame.strings;
         vm->branches = frame.branches;
+        vm->loops = frame.loops;
         vm->frames.pop();
         vm->programCounter = frame.returnAddress;
     }
@@ -555,10 +557,12 @@ static void CreateStackFrame(VirtualMachine* vm, StackFrame& frame, int numArgum
     frame.locals = vm->locals;
     frame.strings = vm->strings;
     frame.branches = vm->branches;
+    frame.loops = vm->loops;
 
     vm->strings.clear();
     vm->integers.clear();
     vm->locals.clear();
+    vm->loops = std::stack<int>();
     vm->branches = std::stack<int>();
 
     std::vector<Value> imStack;
@@ -831,7 +835,12 @@ static void Op_Loop_End(VirtualMachine* vm, unsigned char* program)
     }
     else if (vm->statusCode == VM_PAUSED)
     {
-        vm->loops.pop();
+        int br = vm->branches.top();
+        if ((br & BR_FROZEN) != BR_FROZEN)
+        {
+            vm->loops.pop();
+        }
+
         Op_EndIf(vm, program);
     }
 }
