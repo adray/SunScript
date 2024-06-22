@@ -1,6 +1,8 @@
 #include "SunScriptDemo.h"
 #include "SunScript.h"
+#include "Sun.h"
 #include <iostream>
+#include <fstream>
 
 using namespace SunScript;
 
@@ -115,4 +117,66 @@ void SunScript::Demo3()
     delete[] programData;
     ShutdownVirtualMachine(vm);
     ReleaseProgram(_program);
+}
+
+static void DumpCallstack(VirtualMachine* vm)
+{
+    SunScript::Callstack* callstack = GetCallStack(vm);
+
+    while (callstack->next)
+    {
+        std::cout << callstack->functionName << "(" << callstack->numArgs + ") PC: " << callstack->programCounter << std::endl;
+        callstack = callstack->next;
+    }
+
+    DestroyCallstack(callstack);
+}
+
+void SunScript::Demo4()
+{
+    const std::string file = "Demo4.txt";
+    std::ofstream stream(file);
+    if (stream.good())
+    {
+        stream << "var foo = -10;" << std::endl;
+        stream << "Print(foo);" << std::endl;
+        stream.close();
+
+        std::cout << "Compiling demo script." << std::endl;
+
+        unsigned char* programData;
+        unsigned char* debugData;
+        std::string error;
+        SunScript::CompileFile(file, &programData, &debugData, &error);
+
+        std::cout << "Compiled script successfully." << std::endl;
+
+        if (programData && debugData)
+        {
+            std::cout << "Running demo script." << std::endl;
+
+            auto vm = SunScript::CreateVirtualMachine();
+            SunScript::SetHandler(vm, &Handler);
+            const int status = SunScript::RunScript(vm, programData, debugData);
+            if (status == VM_ERROR)
+            {
+                std::cout << "Error running demo script." << std::endl;
+                DumpCallstack(vm);
+            }
+            else if (status == VM_OK)
+            {
+                std::cout << "Script completed." << std::endl;
+            }
+
+            ShutdownVirtualMachine(vm);
+        }
+        else
+        {
+            std::cout << "Unable to compile demo script: " << error << std::endl;
+        }
+    }
+    else
+    {
+        std::cout << "Unable to write to file." << std::endl;
+    }
 }

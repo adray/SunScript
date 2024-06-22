@@ -20,6 +20,7 @@ constexpr unsigned char OP_PUSH_LOCAL = 0x9;
 constexpr unsigned char OP_OR = 0xa;
 constexpr unsigned char OP_AND = 0xb;
 constexpr unsigned char OP_LOOP_END = 0xc;
+constexpr unsigned char OP_UNARY_MINUS = 0xd;
 
 constexpr unsigned char OP_ADD = 0x10;
 constexpr unsigned char OP_SUB = 0x1a;
@@ -997,6 +998,34 @@ static void Div_Int(VirtualMachine* vm, Value& v1, Value& v2)
     }
 }
 
+static void Op_Unary_Minus(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->statusCode != VM_OK)
+    {
+        return;
+    }
+
+    if (vm->stack.size() < 1)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    Value var1 = vm->stack.top();
+    vm->stack.pop();
+
+    if (var1.type == TY_INT)
+    {
+        Push_Int(vm, -vm->integers[var1.index]);
+    }
+    else
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+    }
+}
+
 static void Op_Operator(unsigned char op, VirtualMachine* vm, unsigned char* program)
 {
     if (vm->statusCode != VM_OK)
@@ -1282,6 +1311,9 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
         case OP_MUL:
         case OP_DIV:
             Op_Operator(op, vm, program);
+            break;
+        case OP_UNARY_MINUS:
+            Op_Unary_Minus(vm, program);
             break;
         case OP_AND:
             Op_And(vm, program);
@@ -1769,6 +1801,11 @@ void SunScript::EmitEndIf(Program* program)
 void SunScript::EmitFormat(Program* program)
 {
     program->data.push_back(OP_FORMAT);
+}
+
+void SunScript::EmitUnaryMinus(Program* program)
+{
+    program->data.push_back(OP_UNARY_MINUS);
 }
 
 void SunScript::EmitLoop(Program* program)

@@ -134,6 +134,8 @@ namespace SunScript
 
     void EmitFormat(Program* program);
 
+    void EmitUnaryMinus(Program* program);
+
     void EmitDone(Program* program);
 
     void EmitDebug(Program* program, int line);

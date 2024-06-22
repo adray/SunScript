@@ -624,7 +624,7 @@ void Parser::EmitExpr(Expr* expr)
         }
         else
         {
-            SetError("Unary minus not implemented");
+            EmitUnaryMinus(_program);
         }
         break;
     case TokenType::SLASH:
@@ -1458,11 +1458,14 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
 
     *programData = nullptr;
 
-    GetProgram(program, programData);
-
-    if (debugData)
+    if (program)
     {
-        GetDebugData(program, debugData);
+        GetProgram(program, programData);
+
+        if (debugData)
+        {
+            GetDebugData(program, debugData);
+        }
     }
 }
 
@@ -1478,6 +1481,7 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
         std::cout << "Usage:" << std::endl;
         std::cout << "Sun build <file1> <file2>..." << std::endl;
         std::cout << "Sun disassemble <file1>" << std::endl;
+        std::cout << "Sun demo" << std::endl;
     }
 
     static void Build(int numFiles, char** files)
@@ -1570,6 +1574,7 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
                 std::cout << "sun demo1" << std::endl;
                 std::cout << "sun demo2" << std::endl;
                 std::cout << "sun demo3" << std::endl;
+                std::cout << "sun demo4" << std::endl;
             }
             else if (cmd == "demo1")
             {
@@ -1585,6 +1590,11 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
             {
                 std::cout << "Running Demo3()" << std::endl;
                 SunScript::Demo3();
+            }
+            else if (cmd == "demo4")
+            {
+                std::cout << "Running Demo4()" << std::endl;
+                SunScript::Demo4();
             }
             else
             {
