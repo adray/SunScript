@@ -1522,6 +1522,9 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
         case OP_OR:
             ss << "OP_OR" << std::endl;
             break;
+        case OP_UNARY_MINUS:
+            ss << "OP_UNARY_MINUS" << std::endl;
+            break;
         case OP_ADD:
             ss << "OP_ADD" << std::endl;
             break;
