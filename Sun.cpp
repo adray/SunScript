@@ -661,12 +661,12 @@ void Parser::EmitExpr(Expr* expr)
             if (call->Yield())
             {
                 EmitDebug(_program, tok.Line());
-                EmitYield(_program, tok.String());
+                EmitYield(_program, tok.String(), unsigned char(args.size()));
             }
             else
             {
                 EmitDebug(_program, tok.Line());
-                EmitCall(_program, tok.String());
+                EmitCall(_program, tok.String(), unsigned char(args.size()));
             }
             _emitCall = true;
         }

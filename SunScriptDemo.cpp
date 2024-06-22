@@ -31,20 +31,20 @@ void SunScript::Demo1(int _42)
     auto _program = CreateProgram();
 
     SunScript::EmitPush(_program, "Hello, from sunbeam.");
-    SunScript::EmitCall(_program, "Print");
+    SunScript::EmitCall(_program, "Print", 1);
     SunScript::EmitPush(_program, 42);
     SunScript::EmitPush(_program, _42);
     SunScript::EmitEquals(_program);
     SunScript::EmitIf(_program);
     SunScript::EmitPush(_program, "10 times 10 is:");
-    SunScript::EmitCall(_program, "Print");
+    SunScript::EmitCall(_program, "Print", 1);
     SunScript::EmitPush(_program, 10);
     SunScript::EmitPush(_program, 10);
     SunScript::EmitMul(_program);
-    SunScript::EmitCall(_program, "Print");
+    SunScript::EmitCall(_program, "Print", 1);
     SunScript::EmitEndIf(_program);
     SunScript::EmitPush(_program, "Bye, from sunbeam.");
-    SunScript::EmitCall(_program, "Print");
+    SunScript::EmitCall(_program, "Print", 1);
     SunScript::EmitDone(_program);
 
     unsigned char* programData;
@@ -72,7 +72,7 @@ void SunScript::Demo2()
     SunScript::EmitAnd(_program);
     SunScript::EmitIf(_program);
     SunScript::EmitPush(_program, "11 == 11 && \"Hello\" == \"Hello\"");
-    SunScript::EmitCall(_program, "Print");
+    SunScript::EmitCall(_program, "Print", 1);
     SunScript::EmitDone(_program);
 
     unsigned char* programData;
@@ -103,7 +103,7 @@ void SunScript::Demo3()
     SunScript::EmitAdd(_program);
     SunScript::EmitPop(_program, "x");
     SunScript::EmitPushLocal(_program, "x");
-    SunScript::EmitCall(_program, "Print");
+    SunScript::EmitCall(_program, "Print", 1);
     SunScript::EmitEndLoop(_program);
     SunScript::EmitDone(_program);
 
@@ -123,9 +123,9 @@ static void DumpCallstack(VirtualMachine* vm)
 {
     SunScript::Callstack* callstack = GetCallStack(vm);
 
-    while (callstack->next)
+    while (callstack)
     {
-        std::cout << callstack->functionName << "(" << callstack->numArgs + ") PC: " << callstack->programCounter << std::endl;
+        std::cout << callstack->functionName << "(" << callstack->numArgs << ") PC: " << callstack->programCounter << " Line: " << callstack->debugLine << std::endl;
         callstack = callstack->next;
     }
 
@@ -140,6 +140,20 @@ void SunScript::Demo4()
     {
         stream << "var foo = -10;" << std::endl;
         stream << "Print(foo);" << std::endl;
+        stream << "function Test1() {" << std::endl;
+        stream << "    Print(\"Test\");" << std::endl;
+        stream << "    return 5;" << std::endl;
+        stream << "}" << std::endl;
+        stream << "function Test2(x) {" << std::endl;
+        stream << "    Print(\"Foo: \" + x);" << std::endl;
+        stream << "}" << std::endl;
+        stream << "function Test3(x) {" << std::endl;
+        stream << "    return x;" << std::endl;
+        stream << "}" << std::endl;
+        stream << "1 + Test3(1);" << std::endl;
+        stream << "var x = 2 + Test1();" << std::endl;
+        stream << "Print(x);" << std::endl;
+        stream << "Test2(Test1() + 5);" << std::endl;
         stream.close();
 
         std::cout << "Compiling demo script." << std::endl;

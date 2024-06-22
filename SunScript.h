@@ -96,9 +96,9 @@ namespace SunScript
 
     void EmitPop(Program* program);
 
-    void EmitYield(Program* program, const std::string& name);
+    void EmitYield(Program* program, const std::string& name, unsigned char numArgs);
 
-    void EmitCall(Program* program, const std::string& name);
+    void EmitCall(Program* program, const std::string& name, unsigned char numArgs);
 
     void EmitAdd(Program* program);
 

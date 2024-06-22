@@ -61,6 +61,7 @@ namespace SunScript
     {
         int debugLine;
         int returnAddress;
+        int stackBounds;
         std::string functionName;
         std::stack<int> branches;
         std::unordered_map<std::string, Value> locals;
@@ -88,6 +89,7 @@ namespace SunScript
         std::chrono::steady_clock clock;
         int instructionsExecuted;
         int debugLine;
+        int stackBounds;
         std::string callName;
         std::stack<int> branches;
         std::stack<int> loops;
@@ -199,6 +201,13 @@ int SunScript::LoadScript(const std::string& filepath, unsigned char** program)
     }
 
     return 0;
+}
+
+static unsigned char Read_Byte(unsigned char* program, unsigned int* pc)
+{
+    unsigned char byte = program[*pc];
+    (*pc)++;
+    return byte;
 }
 
 static int Read_Int(unsigned char* program, unsigned int* pc)
@@ -546,6 +555,7 @@ static void Op_Return(VirtualMachine* vm, unsigned char* program)
         vm->strings = frame.strings;
         vm->branches = frame.branches;
         vm->loops = frame.loops;
+        vm->stackBounds = frame.stackBounds;
         vm->frames.pop();
         vm->programCounter = frame.returnAddress;
     }
@@ -559,12 +569,14 @@ static void CreateStackFrame(VirtualMachine* vm, StackFrame& frame, int numArgum
     frame.strings = vm->strings;
     frame.branches = vm->branches;
     frame.loops = vm->loops;
+    frame.stackBounds = vm->stackBounds;
 
     vm->strings.clear();
     vm->integers.clear();
     vm->locals.clear();
     vm->loops = std::stack<int>();
     vm->branches = std::stack<int>();
+    vm->stackBounds = int(vm->stack.size()) - numArguments;
 
     std::vector<Value> imStack;
 
@@ -600,35 +612,44 @@ static void CreateStackFrame(VirtualMachine* vm, StackFrame& frame, int numArgum
 
 static void Op_Call(VirtualMachine* vm, unsigned char* program)
 {
-    if (vm->handler)
+    unsigned char numArgs = Read_Byte(program, &vm->programCounter);
+    vm->callName = Read_String(program, &vm->programCounter);
+    if (vm->statusCode == VM_OK)
     {
-        // Calls out to a handler
-        // parameters can be accessed via GetParamInt() etc
-        vm->callName = Read_String(program, &vm->programCounter);
-        if (vm->statusCode == VM_OK)
+        const auto& it = vm->functions.find(vm->callName);
+        if (it != vm->functions.end())
         {
-            const auto& it = vm->functions.find(vm->callName);
-            if (it != vm->functions.end())
+            if (it->second.numArgs == numArgs)
             {
                 const int address = it->second.offset + vm->programOffset;
                 StackFrame frame = {};
                 frame.functionName = vm->callName;
                 frame.debugLine = vm->debugLine;
-                CreateStackFrame(vm, frame, it->second.numArgs);
+                CreateStackFrame(vm, frame, numArgs);
                 vm->frames.push(frame);
                 vm->programCounter = address;
             }
             else
             {
-                vm->handler(vm);
+                vm->running = false;
+                vm->statusCode = VM_ERROR;
             }
         }
-    }
-    else
-    {
-        // this is an error
-        vm->running = false;
-        vm->statusCode = VM_ERROR;
+        else
+        {
+            if (vm->handler)
+            {
+                // Calls out to a handler
+                // parameters can be accessed via GetParamInt() etc
+                vm->handler(vm);
+            }
+            else
+            {
+                // no handler defined
+                vm->running = false;
+                vm->statusCode = VM_ERROR;
+            }
+        }
     }
 }
 
@@ -636,6 +657,7 @@ static void Op_Yield(VirtualMachine* vm, unsigned char* program)
 {
     if (vm->handler)
     {
+        unsigned char numArgs = Read_Byte(program, &vm->programCounter);
         // Calls out to a handler
         // parameters can be accessed via GetParamInt() etc
         vm->callName = Read_String(program, &vm->programCounter);
@@ -848,9 +870,9 @@ static void Op_Loop_End(VirtualMachine* vm, unsigned char* program)
 
 static void Op_Pop_Discard(VirtualMachine* vm, unsigned char* program)
 {
-    if (vm->statusCode == VM_OK && vm->stack.size() > 0)
+    if (vm->statusCode == VM_OK && vm->stack.size() > vm->stackBounds)
     {
-        if (vm->branches.size() == 0)
+        if (vm->stack.size() == 0)
         {
             vm->statusCode = VM_ERROR;
             vm->running = false;
@@ -1615,7 +1637,7 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             ss << "OP_YIELD " << Read_String(programData, &vm->programCounter) << std::endl;
             break;
         case OP_CALL:
-            ss << "OP_CALL " << Read_String(programData, &vm->programCounter) << std::endl;
+            ss << "OP_CALL " << int(Read_Byte(programData, &vm->programCounter)) << " " << Read_String(programData, &vm->programCounter) << std::endl;
             break;
         case OP_DONE:
             ss << "OP_DONE" << std::endl;
@@ -1719,15 +1741,17 @@ void SunScript::EmitPop(Program* program)
     program->data.push_back(OP_POP_DISCARD);
 }
 
-void SunScript::EmitYield(Program* program, const std::string& name)
+void SunScript::EmitYield(Program* program, const std::string& name, unsigned char numArgs)
 {
     program->data.push_back(OP_YIELD);
+    program->data.push_back(numArgs);
     EmitString(program->data, name);
 }
 
-void SunScript::EmitCall(Program* program, const std::string& name)
+void SunScript::EmitCall(Program* program, const std::string& name, unsigned char numArgs)
 {
     program->data.push_back(OP_CALL);
+    program->data.push_back(numArgs);
     EmitString(program->data, name);
 }
 
