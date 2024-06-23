@@ -138,6 +138,10 @@ namespace SunScript
 
     void EmitUnaryMinus(Program* program);
 
+    void EmitIncrement(Program* program);
+
+    void EmitDecrement(Program* program);
+
     void EmitDone(Program* program);
 
     void EmitDebug(Program* program, int line);

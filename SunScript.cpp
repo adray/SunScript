@@ -21,7 +21,8 @@ constexpr unsigned char OP_OR = 0xa;
 constexpr unsigned char OP_AND = 0xb;
 constexpr unsigned char OP_LOOP_END = 0xc;
 constexpr unsigned char OP_UNARY_MINUS = 0xd;
-
+constexpr unsigned char OP_INCREMENT = 0xe;
+constexpr unsigned char OP_DECREMENT = 0xf;
 constexpr unsigned char OP_ADD = 0x10;
 constexpr unsigned char OP_SUB = 0x1a;
 constexpr unsigned char OP_MUL = 0x1b;
@@ -1182,6 +1183,56 @@ static void Op_Format(VirtualMachine* vm, unsigned char* program)
     }
 }
 
+static void Op_Increment(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->statusCode == VM_OK)
+    {
+        if (vm->stack.size() == 0)
+        {
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
+            return;
+        }
+
+        const SunScript::Value value = vm->stack.top();
+        
+        if (value.type == TY_INT)
+        {
+            vm->integers[value.index]++;
+        }
+        else
+        {
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
+        }
+    }
+}
+
+static void Op_Decrement(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->statusCode == VM_OK)
+    {
+        if (vm->stack.size() == 0)
+        {
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
+            return;
+        }
+
+        const SunScript::Value value = vm->stack.top();
+
+        if (value.type == TY_INT)
+        {
+            vm->integers[value.index]--;
+        }
+        else
+        {
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
+        }
+    }
+}
+
 static void ResetVM(VirtualMachine* vm)
 {
     vm->programCounter = 0;
@@ -1398,6 +1449,12 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
         case OP_POP_DISCARD:
             Op_Pop_Discard(vm, program);
             break;
+        case OP_INCREMENT:
+            Op_Increment(vm, program);
+            break;
+        case OP_DECREMENT:
+            Op_Decrement(vm, program);
+            break;
         }
 
         vm->instructionsExecuted++;
@@ -1564,6 +1621,12 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             break;
         case OP_UNARY_MINUS:
             ss << "OP_UNARY_MINUS" << std::endl;
+            break;
+        case OP_INCREMENT:
+            ss << "OP_INCREMENT" << std::endl;
+            break;
+        case OP_DECREMENT:
+            ss << "OP_DECREMENT" << std::endl;
             break;
         case OP_ADD:
             ss << "OP_ADD" << std::endl;
@@ -1851,6 +1914,16 @@ void SunScript::EmitFormat(Program* program)
 void SunScript::EmitUnaryMinus(Program* program)
 {
     program->data.push_back(OP_UNARY_MINUS);
+}
+
+void SunScript::EmitIncrement(Program* program)
+{
+    program->data.push_back(OP_INCREMENT);
+}
+
+void SunScript::EmitDecrement(Program* program)
+{
+    program->data.push_back(OP_DECREMENT);
 }
 
 void SunScript::EmitLoop(Program* program)

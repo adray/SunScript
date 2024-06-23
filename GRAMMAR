@@ -23,7 +23,7 @@ unary          - ( "!" | "-" ) unary
                | call ;
 primary        - NUMBER | STRING | "true" | "false" | "nil"
                | "(" expression ")" ;
-call           - primary "(" argument? ")" ;
+call           - primary ( "(" argument? ")" )? ( "++" | "--")? ;
 argument       - expression ( "," expression )* ;
 function       - "function" identifier "(" parameter? ")" "{" (statement*) "}" ;
 parameter      - identifier ( "," identifier )* ;

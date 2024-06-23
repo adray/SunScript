@@ -36,6 +36,8 @@ enum class TokenType
     LESS,
     GREATER,
     IDENTIFIER,
+    INCREMENT,
+    DECREMENT,
 
     // Keywords
 
@@ -358,12 +360,14 @@ void Scanner::ScanLine(const std::string& line)
                 Advance();
                 break;
             case '+':
-                AddToken(TokenType::PLUS);
                 Advance();
+                if (Peek() == '+') { Advance(); AddToken(TokenType::INCREMENT); }
+                else { AddToken(TokenType::PLUS); }
                 break;
             case '-':
-                AddToken(TokenType::MINUS);
                 Advance();
+                if (Peek() == '-') { Advance(); AddToken(TokenType::DECREMENT); }
+                else { AddToken(TokenType::MINUS); }
                 break;
             case '*':
                 AddToken(TokenType::STAR);
@@ -611,6 +615,12 @@ void Parser::EmitExpr(Expr* expr)
     case TokenType::NOT_EQUALS:
         EmitNotEquals(_program);
         break;
+    case TokenType::INCREMENT:
+        EmitIncrement(_program);
+        break;
+    case TokenType::DECREMENT:
+        EmitDecrement(_program);
+        break;
     case TokenType::PLUS:
         EmitAdd(_program);
         break;
@@ -714,7 +724,7 @@ void Parser::SetError(const std::string& text)
         _isError = true;
         _errorText = text;
         _scanning = false;
-        _errorLine = _tokens[_pos].Line();
+        _errorLine = _tokens[std::min(int(_tokens.size()) - 1, _pos)].Line();
     }
 }
 
@@ -885,6 +895,12 @@ Expr* Parser::ParseCall()
         {
             Advance();
         }
+    }
+    if (Match(TokenType::INCREMENT) || Match(TokenType::DECREMENT))
+    {
+        Token token = Peek();
+        Advance();
+        expr = new Expr(nullptr, expr, token);
     }
     return expr;
 }
@@ -1146,6 +1162,36 @@ void Parser::ParseAssignment()
             FreeExpr(expr);
 
             Advance();
+        }
+        else
+        {
+            SetError("Unexcepted token.");
+        }
+    }
+    else if (Match(TokenType::INCREMENT))
+    {
+        Advance();
+
+        if (Match(TokenType::SEMICOLON))
+        {
+            EmitPushLocal(_program, identifier.String());
+            EmitIncrement(_program);
+            EmitPop(_program, identifier.String());
+        }
+        else
+        {
+            SetError("Unexcepted token.");
+        }
+    }
+    else if (Match(TokenType::DECREMENT))
+    {
+        Advance();
+
+        if (Match(TokenType::SEMICOLON))
+        {
+            EmitPushLocal(_program, identifier.String());
+            EmitDecrement(_program);
+            EmitPop(_program, identifier.String());
         }
         else
         {
@@ -1575,6 +1621,7 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
                 std::cout << "sun demo2" << std::endl;
                 std::cout << "sun demo3" << std::endl;
                 std::cout << "sun demo4" << std::endl;
+                std::cout << "sun demo5" << std::endl;
             }
             else if (cmd == "demo1")
             {
@@ -1595,6 +1642,11 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
             {
                 std::cout << "Running Demo4()" << std::endl;
                 SunScript::Demo4();
+            }
+            else if (cmd == "demo5")
+            {
+                std::cout << "Running Demo5()" << std::endl;
+                SunScript::Demo5();
             }
             else
             {

@@ -139,28 +139,12 @@ static void DumpCallstack(VirtualMachine* vm)
     DestroyCallstack(callstack);
 }
 
-void SunScript::Demo4()
+static void RunDemoScript(const std::string& filename, const std::string& str)
 {
-    const std::string file = "Demo4.txt";
-    std::ofstream stream(file);
+    std::ofstream stream(filename);
     if (stream.good())
     {
-        stream << "var foo = -10;" << std::endl;
-        stream << "Print(foo);" << std::endl;
-        stream << "function Test1() {" << std::endl;
-        stream << "    Print(\"Test\");" << std::endl;
-        stream << "    return 5;" << std::endl;
-        stream << "}" << std::endl;
-        stream << "function Test2(x) {" << std::endl;
-        stream << "    Print(\"Foo: \" + x);" << std::endl;
-        stream << "}" << std::endl;
-        stream << "function Test3(x) {" << std::endl;
-        stream << "    return x;" << std::endl;
-        stream << "}" << std::endl;
-        stream << "1 + Test3(1);" << std::endl;
-        stream << "var x = 2 + Test1();" << std::endl;
-        stream << "Print(x);" << std::endl;
-        stream << "Test2(Test1() + 5);" << std::endl;
+        stream << str;
         stream.close();
 
         std::cout << "Compiling demo script." << std::endl;
@@ -168,9 +152,7 @@ void SunScript::Demo4()
         unsigned char* programData;
         unsigned char* debugData;
         std::string error;
-        SunScript::CompileFile(file, &programData, &debugData, &error);
-
-        std::cout << "Compiled script successfully." << std::endl;
+        SunScript::CompileFile(filename, &programData, &debugData, &error);
 
         if (programData && debugData)
         {
@@ -200,4 +182,38 @@ void SunScript::Demo4()
     {
         std::cout << "Unable to write to file." << std::endl;
     }
+}
+
+void SunScript::Demo4()
+{
+    std::stringstream stream;
+    stream << "var foo = -10;" << std::endl;
+    stream << "Print(foo);" << std::endl;
+    stream << "function Test1() {" << std::endl;
+    stream << "    Print(\"Test\");" << std::endl;
+    stream << "    return 5;" << std::endl;
+    stream << "}" << std::endl;
+    stream << "function Test2(x) {" << std::endl;
+    stream << "    Print(\"Foo: \" + x);" << std::endl;
+    stream << "}" << std::endl;
+    stream << "function Test3(x) {" << std::endl;
+    stream << "    return x;" << std::endl;
+    stream << "}" << std::endl;
+    stream << "1 + Test3(1);" << std::endl;
+    stream << "var x = 2 + Test1();" << std::endl;
+    stream << "Print(x);" << std::endl;
+    stream << "Test2(Test1() + 5);" << std::endl;
+    RunDemoScript("Demo4.txt", stream.str());
+}
+
+void SunScript::Demo5()
+{
+    std::stringstream ss;
+    ss << "var x = 5;" << std::endl;
+    ss << "x--;" << std::endl;
+    ss << "Print(x);" << std::endl;
+    ss << "var y = (7 + x)++;" << std::endl;
+    ss << "Print(y);" << std::endl;
+
+    RunDemoScript("Demo5.txt", ss.str());
 }
