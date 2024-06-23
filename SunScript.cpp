@@ -1176,6 +1176,7 @@ static void ResetVM(VirtualMachine* vm)
 {
     vm->programCounter = 0;
     vm->programOffset = 0;
+    vm->stackBounds = 0;
     vm->errorCode = 0;
     vm->instructionsExecuted = 0;
     vm->timeout = 0;
