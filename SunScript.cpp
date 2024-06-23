@@ -90,6 +90,7 @@ namespace SunScript
         int instructionsExecuted;
         int debugLine;
         int stackBounds;
+        int callNumArgs;
         std::string callName;
         std::stack<int> branches;
         std::stack<int> loops;
@@ -100,7 +101,7 @@ namespace SunScript
         std::unordered_map<std::string, Value> locals;
         std::vector<std::string> strings;
         std::vector<int> integers;
-        void (*handler)(VirtualMachine* vm);
+        int (*handler)(VirtualMachine* vm);
         void* _userData;
     };
 
@@ -168,7 +169,7 @@ void SunScript::ShutdownVirtualMachine(VirtualMachine* vm)
     delete vm;
 }
 
-void SunScript::SetHandler(VirtualMachine* vm, void handler(VirtualMachine* vm))
+void SunScript::SetHandler(VirtualMachine* vm, int handler(VirtualMachine* vm))
 {
     vm->handler = handler;
 }
@@ -614,6 +615,7 @@ static void Op_Call(VirtualMachine* vm, unsigned char* program)
 {
     unsigned char numArgs = Read_Byte(program, &vm->programCounter);
     vm->callName = Read_String(program, &vm->programCounter);
+    vm->callNumArgs = numArgs;
     if (vm->statusCode == VM_OK)
     {
         const auto& it = vm->functions.find(vm->callName);
@@ -641,7 +643,8 @@ static void Op_Call(VirtualMachine* vm, unsigned char* program)
             {
                 // Calls out to a handler
                 // parameters can be accessed via GetParamInt() etc
-                vm->handler(vm);
+                vm->statusCode = vm->handler(vm);
+                vm->running = vm->statusCode == VM_OK;
             }
             else
             {
@@ -661,12 +664,19 @@ static void Op_Yield(VirtualMachine* vm, unsigned char* program)
         // Calls out to a handler
         // parameters can be accessed via GetParamInt() etc
         vm->callName = Read_String(program, &vm->programCounter);
+        vm->callNumArgs = numArgs;
         if (vm->statusCode == VM_OK)
         {
-            vm->handler(vm);
-
-            vm->running = false;
-            vm->statusCode = VM_YIELDED;
+            if (vm->handler(vm) == VM_ERROR)
+            {
+                vm->running = false;
+                vm->statusCode = VM_ERROR;
+            }
+            else
+            {
+                vm->running = false;
+                vm->statusCode = VM_YIELDED;
+            }
         }
     }
     else
@@ -1180,6 +1190,7 @@ static void ResetVM(VirtualMachine* vm)
     vm->errorCode = 0;
     vm->instructionsExecuted = 0;
     vm->timeout = 0;
+    vm->callNumArgs = 0;
     vm->resumeCode = VM_OK;
     while (!vm->stack.empty()) { vm->stack.pop(); }
     while (!vm->frames.empty()) { vm->frames.pop(); }
@@ -1410,6 +1421,12 @@ void SunScript::PushReturnValue(VirtualMachine* vm, int value)
     {
         Push_Int(vm, value);
     }
+}
+
+int SunScript::GetCallNumArgs(VirtualMachine* vm, int* numArgs)
+{
+    *numArgs = vm->callNumArgs;
+    return VM_OK;
 }
 
 int SunScript::GetCallName(VirtualMachine* vm, std::string* name)

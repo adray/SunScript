@@ -34,7 +34,7 @@ namespace SunScript
 
     void ShutdownVirtualMachine(VirtualMachine* vm);
 
-    void SetHandler(VirtualMachine* vm, void handler(VirtualMachine* vm));
+    void SetHandler(VirtualMachine* vm, int handler(VirtualMachine* vm));
 
     void* GetUserData(VirtualMachine* vm);
 
@@ -55,6 +55,8 @@ namespace SunScript
     void PushReturnValue(VirtualMachine* vm, const std::string& value);
     
     void PushReturnValue(VirtualMachine* vm, int value);
+
+    int GetCallNumArgs(VirtualMachine* vm, int* numArgs);
 
     int GetCallName(VirtualMachine* vm, std::string* name);
 

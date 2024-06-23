@@ -6,10 +6,13 @@
 
 using namespace SunScript;
 
-void Handler(VirtualMachine* vm)
+int Handler(VirtualMachine* vm)
 {
     std::string name;
     GetCallName(vm, &name);
+
+    int numArgs;
+    GetCallNumArgs(vm, &numArgs);
 
     if (name == "Print")
     {
@@ -18,12 +21,16 @@ void Handler(VirtualMachine* vm)
         if (VM_OK == GetParamString(vm, &param))
         {
             std::cout << param << std::endl;
+            return VM_OK;
         }
         else if (VM_OK == GetParamInt(vm, &intParam))
         {
             std::cout << intParam << std::endl;
+            return VM_OK;
         }
     }
+
+    return VM_ERROR;
 }
 
 void SunScript::Demo1(int _42)
