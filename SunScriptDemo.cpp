@@ -214,6 +214,11 @@ void SunScript::Demo5()
     ss << "Print(x);" << std::endl;
     ss << "var y = (7 + x)++;" << std::endl;
     ss << "Print(y);" << std::endl;
+    ss << "var z = 6;" << std::endl;
+    ss << "z -= 2;" << std::endl;
+    ss << "z += 7;" << std::endl;
+    ss << "z *= 2;" << std::endl;
+    ss << "Print(z);" << std::endl;
 
     RunDemoScript("Demo5.txt", ss.str());
 }

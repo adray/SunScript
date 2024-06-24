@@ -38,6 +38,10 @@ enum class TokenType
     IDENTIFIER,
     INCREMENT,
     DECREMENT,
+    PLUS_EQUALS,
+    MINUS_EQUALS,
+    STAR_EQUALS,
+    SLASH_EQUALS,
 
     // Keywords
 
@@ -362,20 +366,24 @@ void Scanner::ScanLine(const std::string& line)
             case '+':
                 Advance();
                 if (Peek() == '+') { Advance(); AddToken(TokenType::INCREMENT); }
+                else if (Peek() == '=') { Advance(); AddToken(TokenType::PLUS_EQUALS); }
                 else { AddToken(TokenType::PLUS); }
                 break;
             case '-':
                 Advance();
                 if (Peek() == '-') { Advance(); AddToken(TokenType::DECREMENT); }
+                else if (Peek() == '=') { Advance(); AddToken(TokenType::MINUS_EQUALS); }
                 else { AddToken(TokenType::MINUS); }
                 break;
             case '*':
-                AddToken(TokenType::STAR);
                 Advance();
+                if (Peek() == '=') { Advance(); AddToken(TokenType::STAR_EQUALS); }
+                else { AddToken(TokenType::STAR); }
                 break;
             case '/':
                 Advance();
                 if (Peek() == '/') { _scanning = false; } // comment
+                else if (Peek() == '=') { Advance(); AddToken(TokenType::SLASH_EQUALS); }
                 else { AddToken(TokenType::SLASH); }
                 break;
             case '\"':
@@ -1192,6 +1200,43 @@ void Parser::ParseAssignment()
             EmitPushLocal(_program, identifier.String());
             EmitDecrement(_program);
             EmitPop(_program, identifier.String());
+        }
+        else
+        {
+            SetError("Unexcepted token.");
+        }
+    }
+    else if (Match(TokenType::PLUS_EQUALS) || Match(TokenType::MINUS_EQUALS) || Match(TokenType::STAR_EQUALS) || Match(TokenType::SLASH_EQUALS))
+    {
+        Token token = Peek();
+
+        Advance();
+        Expr* expr = ParseExpression();
+
+        if (Match(TokenType::SEMICOLON))
+        {
+            EmitExpr(expr);
+            EmitPushLocal(_program, identifier.String());
+            if (token.Type() == TokenType::MINUS_EQUALS)
+            {
+                EmitSub(_program);
+            }
+            else if (token.Type() == TokenType::PLUS_EQUALS)
+            {
+                EmitAdd(_program);
+            }
+            else if (token.Type() == TokenType::STAR_EQUALS)
+            {
+                EmitMul(_program);
+            }
+            else if (token.Type() == TokenType::SLASH_EQUALS)
+            {
+                EmitDiv(_program);
+            }
+            EmitPop(_program, identifier.String());
+            FreeExpr(expr);
+
+            Advance();
         }
         else
         {
