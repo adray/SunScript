@@ -118,6 +118,10 @@ namespace SunScript
     
     void EmitLessThan(Program* program);
 
+    void EmitLessThanOrEqual(Program* program);
+    
+    void EmitGreaterThanOrEqual(Program* program);
+
     void EmitAnd(Program* program);
 
     void EmitOr(Program* program);

@@ -654,6 +654,12 @@ void Parser::EmitExpr(Expr* expr)
     case TokenType::LESS:
         EmitLessThan(_program);
         break;
+    case TokenType::GREATER_EQUALS:
+        EmitGreaterThanOrEqual(_program);
+        break;
+    case TokenType::LESS_EQUALS:
+        EmitLessThanOrEqual(_program);
+        break;
     case TokenType::OR:
         EmitOr(_program);
         break;

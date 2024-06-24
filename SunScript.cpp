@@ -39,6 +39,8 @@ constexpr unsigned char OP_RETURN = 0x25;
 constexpr unsigned char OP_POP_DISCARD = 0x26;
 constexpr unsigned char OP_ELSE = 0x27;
 constexpr unsigned char OP_ELSE_IF = 0x28;
+constexpr unsigned char OP_GREATER_EQUAL_THAN = 0x29;
+constexpr unsigned char OP_LESS_EQUAL_THAN = 0x2a;
 
 constexpr unsigned char TY_VOID = 0x0;
 constexpr unsigned char TY_INT = 0x1;
@@ -279,6 +281,12 @@ static bool Compare_Int(unsigned char op, VirtualMachine* vm, Value& var1, Value
     case OP_LESS_THAN:
         result = vm->integers[var1.index] < vm->integers[var2.index];
         break;
+    case OP_LESS_EQUAL_THAN:
+        result = vm->integers[var1.index] <= vm->integers[var2.index];
+        break;
+    case OP_GREATER_EQUAL_THAN:
+        result = vm->integers[var1.index] >= vm->integers[var2.index];
+        break;
     }
 
     return result;
@@ -300,6 +308,12 @@ static bool Compare_String(unsigned char op, VirtualMachine* vm, Value& var1, Va
         break;
     case OP_LESS_THAN:
         result = vm->strings[var1.index] < vm->strings[var2.index];
+        break;
+    case OP_LESS_EQUAL_THAN:
+        result = vm->strings[var1.index] <= vm->strings[var2.index];
+        break;
+    case OP_GREATER_EQUAL_THAN:
+        result = vm->strings[var1.index] >= vm->strings[var2.index];
         break;
     }
 
@@ -1389,6 +1403,8 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
         case OP_NOT_EQUALS:
         case OP_GREATER_THAN:
         case OP_LESS_THAN:
+        case OP_LESS_EQUAL_THAN:
+        case OP_GREATER_EQUAL_THAN:
             Op_Compare(op, vm, program);
             break;
         case OP_ADD:
@@ -1658,11 +1674,17 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
         case OP_GREATER_THAN:
             ss << "OP_GREATER_THAN" << std::endl;
             break;
+        case OP_GREATER_EQUAL_THAN:
+            ss << "OP_GREATER_EQUAL_THAN" << std::endl;
+            break;
         case OP_IF:
             ss << "OP_IF" << std::endl;
             break;
         case OP_LESS_THAN:
             ss << "OP_LESS_THAN" << std::endl;
+            break;
+        case OP_LESS_EQUAL_THAN:
+            ss << "OP_LESS_EQUAL_THAN" << std::endl;
             break;
         case OP_LOCAL:
             ss << "OP_LOCAL " << Read_String(programData, &vm->programCounter) << std::endl;
@@ -1874,6 +1896,16 @@ void SunScript::EmitGreaterThan(Program* program)
 void SunScript::EmitLessThan(Program* program)
 {
     program->data.push_back(OP_LESS_THAN);
+}
+
+void SunScript::EmitLessThanOrEqual(Program* program)
+{
+    program->data.push_back(OP_LESS_EQUAL_THAN);
+}
+
+void SunScript::EmitGreaterThanOrEqual(Program* program)
+{
+    program->data.push_back(OP_GREATER_EQUAL_THAN);
 }
 
 void SunScript::EmitAnd(Program* program)

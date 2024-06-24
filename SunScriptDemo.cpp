@@ -219,6 +219,7 @@ void SunScript::Demo5()
     ss << "z += 7;" << std::endl;
     ss << "z *= 2;" << std::endl;
     ss << "Print(z);" << std::endl;
+    ss << "if (z >= 5) { Print(\"Foo\"); }" << std::endl;
 
     RunDemoScript("Demo5.txt", ss.str());
 }
