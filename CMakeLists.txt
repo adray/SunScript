@@ -6,9 +6,13 @@ set (SUN_SOURCES
     "SunScript.cpp"
     "Sun.cpp"
     "SunScriptDemo.cpp"
+    "SunJIT.cpp"
     "SunScript.h"
     "Sun.h"
     "SunScriptDemo.h"
+    "SunJIT.h"
+    "Tests/SunTest.h"
+    "Tests/SunTest.cpp"
 )
 
 project ("Sun")

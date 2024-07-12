@@ -1,6 +1,7 @@
 #include "SunScriptDemo.h"
 #include "SunScript.h"
 #include "Sun.h"
+#include "SunJIT.h"
 #include <iostream>
 #include <fstream>
 
@@ -36,23 +37,26 @@ int Handler(VirtualMachine* vm)
 void SunScript::Demo1(int _42)
 {
     auto _program = CreateProgram();
+    auto _block = CreateProgramBlock(true, "main", 0);
+    SunScript::Label label;
 
-    SunScript::EmitPush(_program, "Hello, from sunbeam.");
-    SunScript::EmitCall(_program, "Print", 1);
-    SunScript::EmitPush(_program, 42);
-    SunScript::EmitPush(_program, _42);
-    SunScript::EmitEquals(_program);
-    SunScript::EmitIf(_program);
-    SunScript::EmitPush(_program, "10 times 10 is:");
-    SunScript::EmitCall(_program, "Print", 1);
-    SunScript::EmitPush(_program, 10);
-    SunScript::EmitPush(_program, 10);
-    SunScript::EmitMul(_program);
-    SunScript::EmitCall(_program, "Print", 1);
-    SunScript::EmitEndIf(_program);
-    SunScript::EmitPush(_program, "Bye, from sunbeam.");
-    SunScript::EmitCall(_program, "Print", 1);
-    SunScript::EmitDone(_program);
+    SunScript::EmitPush(_block, "Hello, from sunbeam.");
+    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitPush(_block, 42);
+    SunScript::EmitPush(_block, _42);
+    SunScript::EmitCompare(_block);
+    SunScript::EmitJump(_block, JUMP_NE, &label);
+    SunScript::EmitPush(_block, "10 times 10 is:");
+    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitPush(_block, 10);
+    SunScript::EmitPush(_block, 10);
+    SunScript::EmitMul(_block);
+    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitLabel(_block, &label);
+    SunScript::EmitPush(_block, "Bye, from sunbeam.");
+    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitDone(_block);
+    SunScript::EmitProgramBlock(_program, _block);
 
     unsigned char* programData;
     GetProgram(_program, &programData);
@@ -64,23 +68,29 @@ void SunScript::Demo1(int _42)
     delete[] programData;
     ShutdownVirtualMachine(vm);
     ReleaseProgram(_program);
+    ReleaseProgramBlock(_block);
 }
 
 void SunScript::Demo2()
 {
     auto _program = CreateProgram();
+    auto _block = CreateProgramBlock(true, "main", 0);
 
-    SunScript::EmitPush(_program, 11);
-    SunScript::EmitPush(_program, 11);
-    SunScript::EmitEquals(_program);
-    SunScript::EmitPush(_program, "Hello");
-    SunScript::EmitPush(_program, "Hello");
-    SunScript::EmitEquals(_program);
-    SunScript::EmitAnd(_program);
-    SunScript::EmitIf(_program);
-    SunScript::EmitPush(_program, "11 == 11 && \"Hello\" == \"Hello\"");
-    SunScript::EmitCall(_program, "Print", 1);
-    SunScript::EmitDone(_program);
+    Label label;
+
+    SunScript::EmitPush(_block, 11);
+    SunScript::EmitPush(_block, 11);
+    SunScript::EmitCompare(_block);
+    SunScript::EmitJump(_block, JUMP_NE, &label);
+    SunScript::EmitPush(_block, "Hello");
+    SunScript::EmitPush(_block, "Hello");
+    SunScript::EmitCompare(_block);
+    SunScript::EmitJump(_block, JUMP_NE, &label);
+    SunScript::EmitPush(_block, "11 == 11 && \"Hello\" == \"Hello\"");
+    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitLabel(_block, &label);
+    SunScript::EmitDone(_block);
+    SunScript::EmitProgramBlock(_program, _block);
 
     unsigned char* programData;
     GetProgram(_program, &programData);
@@ -92,27 +102,35 @@ void SunScript::Demo2()
     delete[] programData;
     ShutdownVirtualMachine(vm);
     ReleaseProgram(_program);
+    ReleaseProgramBlock(_block);
 }
 
 void SunScript::Demo3()
 {
     auto _program = CreateProgram();
+    auto _block = CreateProgramBlock(true, "main", 0);
 
-    SunScript::EmitLocal(_program, "x");
-    SunScript::EmitSet(_program, "x", 0);
-    SunScript::EmitLoop(_program);
-    SunScript::EmitPush(_program, 10);
-    SunScript::EmitPushLocal(_program, "x");
-    SunScript::EmitLessThan(_program);
-    SunScript::EmitIf(_program);
-    SunScript::EmitPushLocal(_program, "x");
-    SunScript::EmitPush(_program, 1);
-    SunScript::EmitAdd(_program);
-    SunScript::EmitPop(_program, "x");
-    SunScript::EmitPushLocal(_program, "x");
-    SunScript::EmitCall(_program, "Print", 1);
-    SunScript::EmitEndLoop(_program);
-    SunScript::EmitDone(_program);
+    Label loopStart;
+    Label loopEnd;
+
+    SunScript::EmitLocal(_block, "x");
+    SunScript::EmitSet(_block, "x", 0);
+    SunScript::MarkLabel(_block, &loopStart);
+    SunScript::EmitPush(_block, 10);
+    SunScript::EmitPushLocal(_block, "x");
+    SunScript::EmitCompare(_block);
+    SunScript::EmitJump(_block, JUMP_GE, &loopEnd);
+    SunScript::EmitPushLocal(_block, "x");
+    SunScript::EmitPush(_block, 1);
+    SunScript::EmitAdd(_block);
+    SunScript::EmitPop(_block, "x");
+    SunScript::EmitPushLocal(_block, "x");
+    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitJump(_block, JUMP, &loopStart);
+    SunScript::EmitLabel(_block, &loopEnd);
+    SunScript::EmitDone(_block);
+    SunScript::EmitMarkedLabel(_block, &loopStart);
+    SunScript::EmitProgramBlock(_program, _block);
 
     unsigned char* programData;
     GetProgram(_program, &programData);
@@ -124,6 +142,7 @@ void SunScript::Demo3()
     delete[] programData;
     ShutdownVirtualMachine(vm);
     ReleaseProgram(_program);
+    ReleaseProgramBlock(_block);
 }
 
 static void DumpCallstack(VirtualMachine* vm)
@@ -139,7 +158,7 @@ static void DumpCallstack(VirtualMachine* vm)
     DestroyCallstack(callstack);
 }
 
-static void RunDemoScript(const std::string& filename, const std::string& str)
+static void RunDemoScript(const std::string& filename, const std::string& str, bool jit_enabled)
 {
     std::ofstream stream(filename);
     if (stream.good())
@@ -160,6 +179,14 @@ static void RunDemoScript(const std::string& filename, const std::string& str)
 
             auto vm = SunScript::CreateVirtualMachine();
             SunScript::SetHandler(vm, &Handler);
+
+            if (jit_enabled)
+            {
+                Jit jit = {};
+                SunScript::JIT_Setup(&jit);
+                SunScript::SetJIT(vm, &jit);
+            }
+
             const int status = SunScript::RunScript(vm, programData, debugData);
             if (status == VM_ERROR)
             {
@@ -169,6 +196,11 @@ static void RunDemoScript(const std::string& filename, const std::string& str)
             else if (status == VM_OK)
             {
                 std::cout << "Script completed." << std::endl;
+            }
+
+            if (jit_enabled)
+            {
+                std::cout << SunScript::JITStats(vm) << std::endl;
             }
 
             ShutdownVirtualMachine(vm);
@@ -203,7 +235,7 @@ void SunScript::Demo4()
     stream << "var x = 2 + Test1();" << std::endl;
     stream << "Print(x);" << std::endl;
     stream << "Test2(Test1() + 5);" << std::endl;
-    RunDemoScript("Demo4.txt", stream.str());
+    RunDemoScript("Demo4.txt", stream.str(), false);
 }
 
 void SunScript::Demo5()
@@ -221,5 +253,33 @@ void SunScript::Demo5()
     ss << "Print(z);" << std::endl;
     ss << "if (z >= 5) { Print(\"Foo\"); }" << std::endl;
 
-    RunDemoScript("Demo5.txt", ss.str());
+    RunDemoScript("Demo5.txt", ss.str(), false);
+}
+
+void SunScript::Demo6()
+{
+    std::stringstream ss;
+    ss << "function test() {" << std::endl;
+    ss << "    Print(\"Test\");" << std::endl;
+    ss << "}" << std::endl;
+    ss << "function add(x) {" << std::endl;
+    ss << "    var y = 10;" << std::endl;
+    ss << "    Print(x * y * 2);" << std::endl;
+    ss << "    Print(\"Adding..\");" << std::endl;
+    ss << "    Print(\"Adding2..\");" << std::endl;
+    ss << "    test();" << std::endl;
+    ss << "    test();" << std::endl;
+    ss << "}" << std::endl;
+    ss << "var j = \"Foo\";" << std::endl;
+    ss << "add(4);" << std::endl;
+    ss << "add(5);" << std::endl;
+    ss << "if (6 == 5 && (10 == 10 || 12 == 12)) {" << std::endl;
+    ss << "    Print(j + j);" << std::endl;
+    ss << "} else if (5 == 5 || (10 == 10 && 12 == 12)) {" << std::endl;
+    ss << "    Print(j + j + j);" << std::endl;
+    ss << "} else {" << std::endl;
+    ss << "    Print(j);" << std::endl;
+    ss << "}" << std::endl;
+
+    RunDemoScript("Demo6.txt", ss.str(), true);
 }

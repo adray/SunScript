@@ -1,0 +1,75 @@
+var x = 10;
+var hits = 0;
+
+if (x == 10) {
+    hits++;
+}
+
+if (x == 9) {
+    assertFalse();
+}
+
+if (x == 9) {
+    assertFalse();
+} else {
+    hits++;
+}
+
+if (x == 10 && 10 == 10) {
+    hits++;
+}
+
+if (x == 9 && 10 == 10) {
+    assertFalse();
+}
+
+if (x == 10 && (x == 10 || x == 9)) {
+    hits++;
+}
+
+if (x == 8 || (x == 10 && x == 10)) {
+    hits++;
+}
+
+if (x == 10 || x == 8 || x == 8) {
+    hits++;
+}
+
+if (x == 10 && x == 10 && x == 10) {
+    hits++;
+}
+
+if (x == 9 && (x == 10 || x == 9)) {
+    assertFalse();
+} else if (x == 10) {
+    hits++;
+} else {
+    assertFalse();
+}
+
+if (x != 10) {
+    assertFalse();
+}
+
+if (x < 10) {
+    assertFalse();
+}
+
+if (x > 10) {
+    assertFalse();
+}
+
+if (x >= 10 && x <= 10) {
+    hits++;
+}
+
+if (x > 5) {
+    hits++;
+}
+
+var y = 8;
+if (y > x) {
+    assertFalse();
+}
+
+assert(10, hits);

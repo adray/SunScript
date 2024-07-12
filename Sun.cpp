@@ -520,6 +520,149 @@ private:
 };
 
 //====================
+// FlowNode
+//====================
+
+class FlowNode
+{
+public:
+    FlowNode(int id, Expr* expr);
+    FlowNode(int id, Expr* expr, int success, int failure);
+    inline int ID() { return _id; }
+    inline Expr* Expression() { return _expr; }
+    inline Label* GetLabel() { return &_label; }
+    inline int Failure() { return _failure; }
+    inline int Success() { return _success; }
+    inline bool Emitted() { return _emitted; }
+    inline void SetEmitted() { _emitted = true; }
+
+private:
+    Expr* _expr;
+    Label _label;
+    int _success;
+    int _failure;
+    int _id;
+    int _emitted;
+};
+
+FlowNode::FlowNode(int id, Expr* expr)
+    :
+    _expr(expr),
+    _success(-1),
+    _failure(-1),
+    _id(id),
+    _emitted(false)
+{
+}
+
+FlowNode::FlowNode(int id, Expr* expr, int success, int failure)
+    :
+    _expr(expr),
+    _success(success),
+    _failure(failure),
+    _id(id),
+    _emitted(false)
+{
+}
+
+//====================
+// FlowGraph
+//====================
+
+class FlowGraph
+{
+public:
+    FlowGraph();
+
+    void BuildFlowGraph(Expr* expr);
+
+    inline Label* Failure() { return _nodes[_failure].GetLabel(); }
+    inline Label* Success() { return _nodes[_success].GetLabel(); }
+    inline FlowNode& Root() { return _nodes[_root]; }
+    inline FlowNode& GetNode(int node) { return _nodes[node]; }
+
+private:
+    int CreateNode(Expr* expr);
+    int CreateNode(Expr* expr, int failure, int success);
+
+    int EXPR(Expr* expr, int success, int failure);
+    int AND(Expr* expr, int success, int failure);
+    int OR(Expr* expr, int success, int failure);
+
+    int _success;
+    int _failure;
+    int _root;
+    std::vector<FlowNode> _nodes;
+};
+
+FlowGraph::FlowGraph()
+    :
+    _root(-1),
+    _failure(-1),
+    _success(-1)
+{
+    _failure = CreateNode(nullptr);
+    _success = CreateNode(nullptr);
+}
+
+int FlowGraph::CreateNode(Expr* expr)
+{
+    auto& node = _nodes.emplace_back(FlowNode(int(_nodes.size()), expr));
+    return node.ID();
+}
+
+int FlowGraph::CreateNode(Expr* expr, int failure, int success)
+{
+    auto& node = _nodes.emplace_back(FlowNode(int(_nodes.size()), expr, success, failure));
+    return node.ID();
+}
+
+void FlowGraph::BuildFlowGraph(Expr* expr)
+{
+    _root = EXPR(expr, _success, _failure);
+}
+
+int FlowGraph::EXPR(Expr* expr, int success, int failure)
+{
+    switch (expr->Op().Type())
+    {
+    case TokenType::AND:
+        return AND(expr, success, failure);
+    case TokenType::OR:
+        return OR(expr, success, failure);
+    case TokenType::EQUALS_EQUALS:
+    case TokenType::NOT_EQUALS:
+    case TokenType::LESS:
+    case TokenType::GREATER:
+    case TokenType::GREATER_EQUALS:
+    case TokenType::LESS_EQUALS:
+        return CreateNode(expr, failure, success);
+    }
+
+    return -1;
+}
+
+int FlowGraph::AND(Expr* expr, int success, int failure)
+{
+    // TODO: we may want to do the LEFT node first
+
+    const int left = EXPR(expr->Left(), success, failure);
+    const int right = EXPR(expr->Right(), left, failure);
+
+    return right;
+}
+
+int FlowGraph::OR(Expr* expr, int success, int failure)
+{
+    // TODO: we may want to do the LEFT node first
+
+    const int left = EXPR(expr->Left(), success, failure);
+    const int right = EXPR(expr->Right(), success, left);
+
+    return right;
+}
+
+//====================
 // Parser
 //====================
 
@@ -535,17 +678,33 @@ public:
 
 private:
 
+    struct Branch
+    {
+        int type;
+        FlowGraph graph;
+        Label endLabel;
+        Label startLabel;
+    };
+
     struct StackFrame
     {
+        bool _return;
+        ProgramBlock* _block;
         std::unordered_set<std::string> _vars;
         std::stack<std::unordered_set<std::string>> _scope;
+
+        StackFrame() : _return(false), _block(nullptr) {}
     };
+
+    inline ProgramBlock* Block() { return _frames.top()._block; }
 
     Token Peek();
     void Advance();
     bool Match(TokenType type);
     void SetError(const std::string& text);
     void EmitExpr(Expr* expr);
+    void EmitFlowGraph(FlowGraph& graph, ProgramBlock* program);
+    bool EmitNode(FlowGraph& graph, FlowNode& node, ProgramBlock* program);
     void FreeExpr(Expr* expr);
     void ParseVar();
     void ParseWhile();
@@ -569,6 +728,7 @@ private:
     Expr* ParsePrimary();
     Expr* ParseCall();
     Call* ParseArgument();
+    char Flip(char jump);
 
     bool _scanning;
     int _pos;
@@ -580,7 +740,7 @@ private:
     bool _emitCall;
 
     std::stack<StackFrame> _frames;
-    std::stack<int> _stack;  
+    std::stack<Branch> _branches;
 };
 
 constexpr int ST_IF = 0x0;
@@ -598,12 +758,121 @@ Parser::Parser(const std::vector<Token>& tokens)
     _program = CreateProgram();
     _frames.push(StackFrame());
     _frames.top()._scope.push(std::unordered_set<std::string>());
+    _frames.top()._block = CreateProgramBlock(true, "main", 0);
+}
+
+char Parser::Flip(char jump)
+{
+    switch (jump)
+    {
+    case JUMP_E:
+        return JUMP_NE;
+    case JUMP_NE:
+        return JUMP_E;
+    case JUMP_G:
+        return JUMP_LE;
+    case JUMP_GE:
+        return JUMP_L;
+    case JUMP_L:
+        return JUMP_GE;
+    case JUMP_LE:
+        return JUMP_G;
+    }
+
+    return JUMP;
+}
+
+bool Parser::EmitNode(FlowGraph& graph, FlowNode& node, ProgramBlock* program)
+{
+    if (node.Emitted()) { return false; }
+
+    node.SetEmitted();
+
+    EmitLabel(program, node.GetLabel());
+
+    int jump = 0;
+    switch (node.Expression()->Op().Type())
+    {
+    case TokenType::EQUALS_EQUALS:
+        jump = JUMP_E;
+        break;
+    case TokenType::NOT_EQUALS:
+        jump = JUMP_NE;
+        break;
+    case TokenType::LESS_EQUALS:
+        jump = JUMP_LE;
+        break;
+    case TokenType::GREATER_EQUALS:
+        jump = JUMP_GE;
+        break;
+    case TokenType::LESS:
+        jump = JUMP_L;
+        break;
+    case TokenType::GREATER:
+        jump = JUMP_G;
+        break;
+    }
+
+    EmitExpr(node.Expression());
+
+    bool result = false;
+
+    auto& failure = graph.GetNode(node.Failure());
+    auto& success = graph.GetNode(node.Success());
+
+    if (!failure.Emitted())
+    {
+        if (failure.Expression())
+        {
+            EmitJump(program, jump, success.GetLabel());
+            result = EmitNode(graph, failure, program);
+        }
+        else
+        {
+            EmitJump(program, Flip(jump), failure.GetLabel());
+            result = true;
+        }
+
+        if (!success.Emitted() && success.Expression())
+        {
+            result = EmitNode(graph, success, program);
+        }
+    }
+    else if (!success.Emitted())
+    {
+        if (success.Expression())
+        {
+            EmitJump(program, Flip(jump), failure.GetLabel());
+            result = EmitNode(graph, success, program);
+        }
+        else
+        {
+            EmitJump(program, jump, success.GetLabel());
+            result = false;
+        }
+
+        if (!failure.Emitted() && failure.Expression())
+        {
+            result = EmitNode(graph, failure, program);
+        }
+    }
+
+    return result;
+}
+
+void Parser::EmitFlowGraph(FlowGraph& graph, ProgramBlock* program)
+{
+    const bool result = EmitNode(graph, graph.Root(), program);
+    if (!result)
+    {
+        EmitJump(program, JUMP, graph.Failure());
+    }
+
+    EmitLabel(program, graph.Success());
 }
 
 void Parser::EmitExpr(Expr* expr)
 {
-    bool binary = expr->Left() && expr->Right();
-    
     if (expr->Right())
     {
         EmitExpr(expr->Right());
@@ -614,63 +883,66 @@ void Parser::EmitExpr(Expr* expr)
         EmitExpr(expr->Left());
     }
 
+    ProgramBlock* block = _frames.top()._block;
+    bool binary = expr->Left() && expr->Right();
+
     Token tok = expr->Op();
     switch (tok.Type())
     {
     case TokenType::EQUALS_EQUALS:
-        EmitEquals(_program);
+        EmitCompare(block);
         break;
     case TokenType::NOT_EQUALS:
-        EmitNotEquals(_program);
+        EmitCompare(block);
         break;
     case TokenType::INCREMENT:
-        EmitIncrement(_program);
+        EmitIncrement(block);
         break;
     case TokenType::DECREMENT:
-        EmitDecrement(_program);
+        EmitDecrement(block);
         break;
     case TokenType::PLUS:
-        EmitAdd(_program);
+        EmitAdd(block);
         break;
     case TokenType::STAR:
-        EmitMul(_program);
+        EmitMul(block);
         break;
     case TokenType::MINUS:
         if (binary)
         {
-            EmitSub(_program);
+            EmitSub(block);
         }
         else
         {
-            EmitUnaryMinus(_program);
+            EmitUnaryMinus(block);
         }
         break;
     case TokenType::SLASH:
-        EmitDiv(_program);
+        EmitDiv(block);
         break;
     case TokenType::GREATER:
-        EmitGreaterThan(_program);
+        EmitCompare(block);
         break;
     case TokenType::LESS:
-        EmitLessThan(_program);
+        EmitCompare(block);
         break;
     case TokenType::GREATER_EQUALS:
-        EmitGreaterThanOrEqual(_program);
+        EmitCompare(block);
         break;
     case TokenType::LESS_EQUALS:
-        EmitLessThanOrEqual(_program);
+        EmitCompare(block);
         break;
-    case TokenType::OR:
-        EmitOr(_program);
-        break;
-    case TokenType::AND:
-        EmitAnd(_program);
-        break;
+    //case TokenType::OR:
+    //    EmitOr(block);
+    //    break;
+    //case TokenType::AND:
+    //    EmitAnd(block);
+    //    break;
     case TokenType::STRING:
-        EmitPush(_program, tok.String());
+        EmitPush(block, tok.String());
         break;
     case TokenType::NUMBER:
-        EmitPush(_program, (int)tok.Number());
+        EmitPush(block, (int)tok.Number());
         break;
     case TokenType::IDENTIFIER:
         if (expr->GetCall())
@@ -684,20 +956,20 @@ void Parser::EmitExpr(Expr* expr)
 
             if (call->Yield())
             {
-                EmitDebug(_program, tok.Line());
-                EmitYield(_program, tok.String(), unsigned char(args.size()));
+                EmitDebug(block, tok.Line());
+                EmitYield(block, tok.String(), unsigned char(args.size()));
             }
             else
             {
-                EmitDebug(_program, tok.Line());
-                EmitCall(_program, tok.String(), unsigned char(args.size()));
+                EmitDebug(block, tok.Line());
+                EmitCall(block, tok.String(), unsigned char(args.size()));
             }
             _emitCall = true;
         }
         else
         {
-            EmitDebug(_program, tok.Line());
-            EmitPushLocal(_program, tok.String());
+            EmitDebug(block, tok.Line());
+            EmitPushLocal(block, tok.String());
 
             // If we happened to just make a function call, clear the 
             // emit flag to indicate we have consumed the return value.
@@ -792,11 +1064,17 @@ void Parser::ParseReturn()
                 EmitExpr(expr);
                 FreeExpr(expr);
 
-                EmitReturn(_program);
+                EmitReturn(Block());
             }
             else
             {
-                EmitReturn(_program);
+                EmitReturn(Block());
+            }
+
+            // If there is a top level return record it.
+            if (_frames.top()._scope.size() == 1)
+            {
+                _frames.top()._return = true;
             }
         }
     }
@@ -840,6 +1118,8 @@ void Parser::ParseFunction()
     {
         Advance();
 
+        ProgramBlock* block = nullptr;
+
         if (Match(TokenType::IDENTIFIER))
         {
             Token token = Peek();
@@ -851,13 +1131,15 @@ void Parser::ParseFunction()
 
                 std::vector<std::string> params;
                 ParseParameter(params);
-                EmitBeginFunction(_program, token.String(), int(params.size()));
+                
+                block = CreateProgramBlock(false, token.String(), int(params.size()));
 
                 for (int i = 0; i < int(params.size()); i++)
                 {
                     auto& param = params[i];
-                    EmitLocal(_program, param);
-                    EmitPop(_program, param);
+                    EmitLocal(block, param);
+                    EmitPop(block, param);
+                    EmitParameter(block, param);
                 }
             }
             else
@@ -881,14 +1163,17 @@ void Parser::ParseFunction()
                     Advance();
                     _frames.push(StackFrame());
                     _frames.top()._scope.push(std::unordered_set<std::string>());
+                    _frames.top()._block = block;
                 }
                 else
                 {
+                    ReleaseProgramBlock(block);
                     SetError("Unexpected token, expected '{'");
                 }
             }
             else
             {
+                ReleaseProgramBlock(block);
                 SetError("Unexpected token, expected ')'");
             }
         }
@@ -1100,11 +1385,15 @@ void Parser::ParseIfStatement()
         {
             Advance();
 
-            EmitExpr(expr);
-            EmitIf(_program);
+            Branch br;
+            br.type = ST_IF;
+
+            br.graph.BuildFlowGraph(expr);
+            EmitFlowGraph(br.graph, Block());
+
             FreeExpr(expr);
 
-            _stack.push(ST_IF);
+            _branches.push(br);
             _frames.top()._scope.push(std::unordered_set<std::string>());
         }
     }
@@ -1113,7 +1402,7 @@ void Parser::ParseIfStatement()
         SetError("Unexcepted token.");
     }
 }
-
+ 
 Expr* Parser::ParseExprStatement()
 {
     Expr* expr = ParseExpression();
@@ -1153,7 +1442,7 @@ void Parser::ParseStatement()
         // EmitPop just won't do anything so that is ok as well.
         if (_emitCall)
         {
-            EmitPop(_program);
+            EmitPop(Block());
             _emitCall = false;
         }
     }
@@ -1172,7 +1461,7 @@ void Parser::ParseAssignment()
         if (Match(TokenType::SEMICOLON))
         {
             EmitExpr(expr);
-            EmitPop(_program, identifier.String());
+            EmitPop(Block(), identifier.String());
             FreeExpr(expr);
 
             Advance();
@@ -1188,9 +1477,9 @@ void Parser::ParseAssignment()
 
         if (Match(TokenType::SEMICOLON))
         {
-            EmitPushLocal(_program, identifier.String());
-            EmitIncrement(_program);
-            EmitPop(_program, identifier.String());
+            EmitPushLocal(Block(), identifier.String());
+            EmitIncrement(Block());
+            EmitPop(Block(), identifier.String());
         }
         else
         {
@@ -1203,9 +1492,9 @@ void Parser::ParseAssignment()
 
         if (Match(TokenType::SEMICOLON))
         {
-            EmitPushLocal(_program, identifier.String());
-            EmitDecrement(_program);
-            EmitPop(_program, identifier.String());
+            EmitPushLocal(Block(), identifier.String());
+            EmitDecrement(Block());
+            EmitPop(Block(), identifier.String());
         }
         else
         {
@@ -1222,24 +1511,24 @@ void Parser::ParseAssignment()
         if (Match(TokenType::SEMICOLON))
         {
             EmitExpr(expr);
-            EmitPushLocal(_program, identifier.String());
+            EmitPushLocal(Block(), identifier.String());
             if (token.Type() == TokenType::MINUS_EQUALS)
             {
-                EmitSub(_program);
+                EmitSub(Block());
             }
             else if (token.Type() == TokenType::PLUS_EQUALS)
             {
-                EmitAdd(_program);
+                EmitAdd(Block());
             }
             else if (token.Type() == TokenType::STAR_EQUALS)
             {
-                EmitMul(_program);
+                EmitMul(Block());
             }
             else if (token.Type() == TokenType::SLASH_EQUALS)
             {
-                EmitDiv(_program);
+                EmitDiv(Block());
             }
-            EmitPop(_program, identifier.String());
+            EmitPop(Block(), identifier.String());
             FreeExpr(expr);
 
             Advance();
@@ -1274,8 +1563,8 @@ void Parser::ParseVar()
                 if (Match(TokenType::SEMICOLON))
                 {
                     EmitExpr(expr);
-                    EmitLocal(_program, identifier.String());
-                    EmitPop(_program, identifier.String());
+                    EmitLocal(Block(), identifier.String());
+                    EmitPop(Block(), identifier.String());
                     FreeExpr(expr);
 
                     StackFrame& frame = _frames.top();
@@ -1292,7 +1581,7 @@ void Parser::ParseVar()
             else if (Match(TokenType::SEMICOLON))
             {
                 Advance();
-                EmitLocal(_program, identifier.String());
+                EmitLocal(Block(), identifier.String());
             }
             else
             {
@@ -1316,27 +1605,46 @@ void Parser::ParseElse()
     if (Match(TokenType::ELSE))
     {
         Advance();
-        if (!_stack.top())
+        if (_branches.size() > 0)
         {
+            // After the IF body is executed jump to the end.
+            EmitJump(Block(), JUMP, &_branches.top().endLabel);
+
             if (Match(TokenType::OPEN_BRACE))
             {
                 Advance();
 
-                // Replace the current value now we are in an else
-                _stack.pop();
-                _stack.push(ST_ELSE);
-                _frames.top()._scope.push(std::unordered_set<std::string>());
+                auto& top = _branches.top();
 
-                EmitElse(_program);
+                Branch br;
+                br.type = ST_ELSE;
+                br.endLabel = top.endLabel;
+
+                EmitLabel(Block(), top.graph.Failure());
+
+                // Replace the current value now we are in an else
+                _branches.pop();
+                _branches.push(br);
+                _frames.top()._scope.push(std::unordered_set<std::string>());
             }
             else if (Match(TokenType::IF))
             {
                 Advance();
 
-                _stack.pop();
-                EmitElseIf(_program);
+                auto& top = _branches.top();
+                EmitLabel(Block(), top.graph.Failure());
+                Label label = top.endLabel;
+
+                _branches.pop();
 
                 ParseIfStatement();
+
+                // Propagate the end labels.
+                auto& end = _branches.top().endLabel;
+                end.jumps.insert(
+                    end.jumps.end(),
+                    label.jumps.begin(),
+                    label.jumps.end());
             }
             else
             {
@@ -1350,15 +1658,14 @@ void Parser::ParseElse()
     }
     else
     {
-        _stack.pop();
-        EmitEndIf(_program);
+        EmitLabel(Block(), _branches.top().graph.Failure());
+        EmitLabel(Block(), &_branches.top().endLabel);
+        _branches.pop(); // end if
     }
 }
 
 void Parser::ParseWhile()
 {
-    EmitLoop(_program);
-
     Expr* expr = nullptr;
     if (Match(TokenType::OPEN_PARAN))
     {
@@ -1379,11 +1686,15 @@ void Parser::ParseWhile()
         {
             Advance();
 
-            EmitExpr(expr);
-            EmitIf(_program);
+            Branch br;
+            br.type = ST_WHILE;
+            MarkLabel(Block(), &br.startLabel);
+
+            br.graph.BuildFlowGraph(expr);
+            EmitFlowGraph(br.graph, Block());
             FreeExpr(expr);
 
-            _stack.push(ST_WHILE);
+            _branches.push(br);
             _frames.top()._scope.push(std::unordered_set<std::string>());
         }
     }
@@ -1415,9 +1726,9 @@ void Parser::Parse()
             ParseVar();
             break;
         case TokenType::CLOSE_BRACE:
-            if (_stack.size() > 0)
+            if (_branches.size() > 0)
             {
-                const int val = _stack.top();
+                const int val = _branches.top().type;
 
                 if (val == ST_IF || val == ST_ELSE)
                 {
@@ -1440,17 +1751,31 @@ void Parser::Parse()
                     }
 
                     _frames.top()._scope.pop();
-                    _stack.pop();
+
+                    auto& br = _branches.top();
+                    SunScript::ProgramBlock* prog = Block();
+
+                    EmitJump(prog, JUMP, &br.startLabel);   // Unconditionally jump to start of loop.
+                    EmitMarkedLabel(prog, &br.startLabel);
+                    EmitLabel(prog, &br.endLabel);
+                    EmitLabel(prog, br.graph.Failure());
+                    _branches.pop();
 
                     Advance();
-                    EmitEndLoop(_program);
                 }
             }
             else if (_frames.size() > 1)
             {
                 Advance();
-                EmitEndFunction(_program);
 
+                // If there is no top level return insert one.
+                if (!_frames.top()._return)
+                {
+                    EmitReturn(Block());
+                }
+
+                EmitProgramBlock(_program, Block());
+                ReleaseProgramBlock(Block());
                 _frames.pop();
             }
             else
@@ -1473,15 +1798,18 @@ void Parser::Parse()
         }
     }
 
-    if (_stack.size() != 0)
+    if (_branches.size() != 0)
     {
         SetError("Expected close brace.");
     }
 
     if (!_isError)
     {
-        EmitDone(_program);
+        EmitDone(Block());
+        EmitProgramBlock(_program, Block());
     }
+    
+    ReleaseProgramBlock(Block());
 }
 
 //====================
@@ -1567,12 +1895,13 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
 }
 
 //==========================
-// Sun compilier
+// Sun compiler
 //==========================
 
 #ifdef _SUN_EXECUTABLE_
 #include <iostream>
 #include "SunScriptDemo.h"
+#include "Tests\SunTest.h"
     static void PrintHelp()
     {
         std::cout << "Usage:" << std::endl;
@@ -1665,6 +1994,17 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
                     DisassembleProgram(args[2]);
                 }
             }
+            else if (cmd == "test")
+            {
+                if (numArgs <= 2)
+                {
+                    RunTestSuite(".");
+                }
+                else
+                {
+                    RunTestSuite(args[2]);
+                }
+            }
             else if (cmd == "demo")
             {
                 std::cout << "Demos:" << std::endl;
@@ -1673,6 +2013,7 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
                 std::cout << "sun demo3" << std::endl;
                 std::cout << "sun demo4" << std::endl;
                 std::cout << "sun demo5" << std::endl;
+                std::cout << "sun demo6" << std::endl;
             }
             else if (cmd == "demo1")
             {
@@ -1698,6 +2039,11 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
             {
                 std::cout << "Running Demo5()" << std::endl;
                 SunScript::Demo5();
+            }
+            else if (cmd == "demo6")
+            {
+                std::cout << "Running Demo6()" << std::endl;
+                SunScript::Demo6();
             }
             else
             {
