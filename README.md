@@ -2,4 +2,8 @@ Simple, embeddable and lightweight scripting virtual machine.
 
 Simply, copy the source files into your project.
 
-Within SunScriptDemo.cpp find the Demo method for example usage.
+Sun.cpp/h - Compiler front-end
+SunScript.cpp/h - Virtual machine
+SunJIT.cpp/h - JIT compiler
+
+Within SunScriptDemo.cpp find the Demo methods for example usage.
