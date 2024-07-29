@@ -1050,21 +1050,6 @@ static void ScanDebugData(VirtualMachine* vm, unsigned char* debugData)
     }
 }
 
-int SunScript::RunScript(VirtualMachine* vm, unsigned char* program)
-{
-    return RunScript(vm, program, nullptr);
-}
-
-int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData)
-{
-    return RunScript(vm, program, debugData, std::chrono::duration<int, std::nano>::zero());
-}
-
-int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, std::chrono::duration<int, std::nano> timeout)
-{
-    return RunScript(vm, program, nullptr, timeout);
-}
-
 static void StartVM(VirtualMachine* vm, unsigned char* program)
 {
     vm->running = true;
@@ -1073,59 +1058,6 @@ static void StartVM(VirtualMachine* vm, unsigned char* program)
     vm->startTime = vm->clock.now();
     vm->instructionsExecuted = 0;
     vm->program = program;
-}
-
-static int RunJIT(VirtualMachine* vm)
-{
-    const std::string cacheKey = "@main_";
-
-    void* data = vm->jit.jit_search_cache(vm->jit_instance, cacheKey);
-    if (!data)
-    {
-        FunctionInfo info;
-        FindFunction(vm, "main", info);
-
-        data = vm->jit.jit_compile(vm->jit_instance, vm, vm->program, info, "");
-        if (data != nullptr)
-        {
-            vm->jit.jit_cache(vm->jit_instance, cacheKey, data);
-        }
-    }
-
-    if (data)
-    {
-        const int status = vm->jit.jit_execute(data);
-        if (status == VM_ERROR)
-        {
-            vm->running = false;
-            vm->statusCode = VM_ERROR;
-        }
-        return status;
-    }
-
-    return VM_ERROR;
-}
-
-int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData, std::chrono::duration<int, std::nano> timeout)
-{
-    ResetVM(vm);
-    ScanFunctions(vm, program);
-    ScanDebugData(vm, debugData);
-
-    // Convert timeout to nanoseconds (or whatever it may be specified in)
-    vm->timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout).count();
-
-    if (vm->jit_instance)
-    {
-        StartVM(vm, program);
-        return RunJIT(vm);
-    }
-
-    FunctionInfo info;
-    FindFunction(vm, "main", info);
-    vm->programCounter = info.pc;
-
-    return ResumeScript(vm, program);
 }
 
 inline static void CheckForTimeout(VirtualMachine* vm)
@@ -1142,7 +1074,7 @@ inline static void CheckForTimeout(VirtualMachine* vm)
     }
 }
 
-int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
+static int ResumeScript2(VirtualMachine* vm, unsigned char* program)
 {
     StartVM(vm, program);
 
@@ -1227,6 +1159,84 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
     }
 
     return vm->statusCode;
+}
+
+int SunScript::RunScript(VirtualMachine* vm, unsigned char* program)
+{
+    return RunScript(vm, program, nullptr);
+}
+
+int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData)
+{
+    return RunScript(vm, program, debugData, std::chrono::duration<int, std::nano>::zero());
+}
+
+int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, std::chrono::duration<int, std::nano> timeout)
+{
+    return RunScript(vm, program, nullptr, timeout);
+}
+
+static int RunJIT(VirtualMachine* vm)
+{
+    const std::string cacheKey = "@main_";
+
+    void* data = vm->jit.jit_search_cache(vm->jit_instance, cacheKey);
+    if (!data)
+    {
+        FunctionInfo info;
+        FindFunction(vm, "main", info);
+
+        data = vm->jit.jit_compile(vm->jit_instance, vm, vm->program, info, "");
+        if (data != nullptr)
+        {
+            vm->jit.jit_cache(vm->jit_instance, cacheKey, data);
+        }
+    }
+
+    if (data)
+    {
+        const int status = vm->jit.jit_execute(vm->jit_instance, data);
+        if (status == VM_ERROR)
+        {
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
+        }
+        return status;
+    }
+
+    return VM_ERROR;
+}
+
+int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData, std::chrono::duration<int, std::nano> timeout)
+{
+    ResetVM(vm);
+    ScanFunctions(vm, program);
+    ScanDebugData(vm, debugData);
+
+    // Convert timeout to nanoseconds (or whatever it may be specified in)
+    vm->timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout).count();
+
+    if (vm->jit_instance)
+    {
+        StartVM(vm, program);
+        return RunJIT(vm);
+    }
+
+    FunctionInfo info;
+    FindFunction(vm, "main", info);
+    vm->programCounter = info.pc;
+
+    return ResumeScript2(vm, program);
+}
+
+int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
+{
+    if (vm->jit_instance)
+    {
+        return vm->jit.jit_resume(vm->jit_instance);
+    }
+
+    return ResumeScript2(vm, program);
 }
 
 void SunScript::PushReturnValue(VirtualMachine* vm, const std::string& value)

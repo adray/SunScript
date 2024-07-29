@@ -116,6 +116,10 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     if (program)
     {
         int errorCode = RunScript(vm, program);
+        while (errorCode == VM_YIELDED)
+        {
+            errorCode = ResumeScript(vm, program);
+        }
     }
     else
     {

@@ -76,7 +76,8 @@ namespace SunScript
         void* (*jit_initialize) (void);
         void* (*jit_compile) (void* instance, VirtualMachine* vm, unsigned char* program, 
             const FunctionInfo& info, const std::string& signature);
-        int (*jit_execute) (void* data);
+        int (*jit_execute) (void* instance, void* data);
+        int (*jit_resume) (void* instance);
         void* (*jit_search_cache) (void* instance, const std::string& key);
         int (*jit_cache) (void* instance, const std::string& key, void* data);
         std::string(*jit_stats) (void* data);

@@ -1,0 +1,14 @@
+
+var x = 5;
+var y = -x;
+
+assert(-5, y);
+
+var p = 4 + 5 + 2 + 1;
+assert(12, p);
+
+var q = 4 * 10;
+assert(40, q);
+
+var w = 10 / 2;
+assert(5, w);

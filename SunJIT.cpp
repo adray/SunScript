@@ -120,8 +120,11 @@ enum vm_instructions
     VMI_JG8,
     VMI_JLE8,
     VMI_JGE8,
+    VMI_JA64,
 
-    VMI_IDIV,
+    VMI_NEG64_DST_MEM,
+    VMI_NEG64_DST_REG,
+    VMI_IDIV_SRC_REG,
 
     // End of instructions
     VMI_MAX_INSTRUCTIONS
@@ -181,6 +184,12 @@ static vm_instruction gInstructions[VMI_MAX_INSTRUCTIONS] = {
     INS(0x0, 0x77, 0x0, VM_INSTRUCTION_CODE_OFFSET, CODE_UI, VMI_ENC_D), // VMI_JG8,
     INS(0x0, 0x76, 0x0, VM_INSTRUCTION_CODE_OFFSET, CODE_UI, VMI_ENC_D), // VMI_JLE8,
     INS(0x0, 0x73, 0x0, VM_INSTRUCTION_CODE_OFFSET, CODE_UI, VMI_ENC_D), // VMI_JGE8,
+    INS(0x0, 0xFF, 0x4, VM_INSTRUCTION_CODE_OFFSET, CODE_UR, VMI_ENC_M), // VMI_JA64
+
+    INS(0x48, 0xF7, 0x3, VM_INSTRUCTION_UNARY, CODE_UMO, VMI_ENC_M),     // VMI_NEG64_DST_MEM
+    INS(0x48, 0xF7, 0x3, VM_INSTRUCTION_UNARY, CODE_UR, VMI_ENC_M),     // VMI_NEG64_DST_REG
+
+    INS(0x48, 0xF7, 0x7, VM_INSTRUCTION_UNARY, CODE_UR, VMI_ENC_M),     // VMI_IDIV_SRC_REG
 };
 
 static void vm_emit(const vm_instruction& ins, unsigned char* program, int& count)
@@ -197,7 +206,7 @@ static void vm_emit_ur(const vm_instruction& ins, unsigned char* program, int& c
     if (ins.subins > 0)
     {
         program[count++] = ins.ins;
-        program[count++] = ins.subins | (reg & 0x7);
+        program[count++] = (ins.subins << 3) | (reg & 0x7) | (0x3 << 6);
     }
     else
     {
@@ -261,7 +270,7 @@ static void vm_emit_bri(const vm_instruction& ins, unsigned char* program, int& 
         }
         else
         {
-            program[count++] = (ins.subins << 3) | (reg % 8);
+            program[count++] = (ins.subins << 3) | (reg % 8) | (0x3 << 6);
         }
     }
     else
@@ -333,8 +342,11 @@ static void vm_emit_bmr(const vm_instruction& ins, unsigned char* program, int& 
 
 static void vm_emit_brmo(const vm_instruction& ins, unsigned char* program, int& count, char dst, char src, int offset)
 {
-    assert(ins.code == CODE_BRMO);   
-    if (ins.rex > 0) { program[count++] = ins.rex | (dst >= VM_REGISTER_R8 ? 0x4 : 0x0); }
+    assert(ins.code == CODE_BRMO);
+    if (ins.rex > 0)
+    {
+        program[count++] = ins.rex | (dst >= VM_REGISTER_R8 ? 0x4 : 0x0) | (src >= VM_REGISTER_R8 ? 0x1 : 0x0);
+    }
     program[count++] = ins.ins;
     if (ins.subins > 0) { program[count++] = ins.subins; }
 
@@ -349,7 +361,7 @@ static void vm_emit_brmo(const vm_instruction& ins, unsigned char* program, int&
     }
     else
     {
-        program[count++] = (((dst % 8) & 0x7) << 3) | (0x2 << 6) | (src & 0x7);
+        program[count++] = (((dst % 8) & 0x7) << 3) | (0x2 << 6) | ((src % 8) & 0x7);
         program[count++] = (unsigned char)(offset & 0xff);
         program[count++] = (unsigned char)((offset >> 8) & 0xff);
         program[count++] = (unsigned char)((offset >> 16) & 0xff);
@@ -360,7 +372,10 @@ static void vm_emit_brmo(const vm_instruction& ins, unsigned char* program, int&
 static void vm_emit_bmro(const vm_instruction& ins, unsigned char* program, int& count, char dst, char src, int offset)
 {
     assert(ins.code == CODE_BMRO);
-    if (ins.rex > 0) { program[count++] = ins.rex; }
+    if (ins.rex > 0)
+    {
+        program[count++] = ins.rex | (dst >= VM_REGISTER_R8 ? 0x1 : 0x0) | (src >= VM_REGISTER_R8 ? 0x4 : 0x0);
+    }
     program[count++] = ins.ins;
 
     if (dst == VM_REGISTER_ESP)
@@ -374,7 +389,7 @@ static void vm_emit_bmro(const vm_instruction& ins, unsigned char* program, int&
     }
     else
     {
-        program[count++] = ((src & 0x7) << 3) | (0x2 << 6) | (dst & 0x7);
+        program[count++] = (((src % 8) & 0x7) << 3) | (0x2 << 6) | ((dst % 8) & 0x7);
         program[count++] = (unsigned char)(offset & 0xff);
         program[count++] = (unsigned char)((offset >> 8) & 0xff);
         program[count++] = (unsigned char)((offset >> 16) & 0xff);
@@ -525,10 +540,10 @@ inline static void vm_mul_memory_to_reg_x64(unsigned char* program, int& count, 
     vm_emit_brmo(gInstructions[VMI_MUL64_SRC_MEM_DST_REG], program, count, dst, src, src_offset);
 }
 
-//inline static void vm_div_reg(const vm_instruction_table& table, unsigned char* program, int& count, char reg)
-//{
-//    vm_emit(table.idiv, program, count, reg, 0, 0, 0);
-//}
+inline static void vm_div_reg_x64(unsigned char* program, int& count, char reg)
+{
+    vm_emit_ur(gInstructions[VMI_IDIV_SRC_REG], program, count, reg);
+}
 
 inline static void vm_cmp_reg_to_reg_x64(unsigned char* program, int& count, char dst, char src)
 {
@@ -580,6 +595,11 @@ inline static void vm_jump_greater_equal(unsigned char* program, int& count, cha
     vm_emit_ui(gInstructions[VMI_JGE8], program, count, imm);
 }
 
+inline static void vm_jump_absolute(unsigned char* program, int& count, char reg)
+{
+    vm_emit_ur(gInstructions[VMI_JA64], program, count, reg);
+}
+
 static void vm_call(unsigned char* program, int& count, int offset)
 {
     offset -= 5;
@@ -620,6 +640,16 @@ inline static void vm_dec_reg_x64(unsigned char* program, int& count, int reg)
 inline static void vm_dec_memory_x64(unsigned char* program, int& count, int reg, int offset)
 {
     vm_emit_umo(gInstructions[VMI_DEC64_DST_MEM], program, count, reg, offset);
+}
+
+inline static void vm_neg_memory_x64(unsigned char* program, int& count, int reg, int offset)
+{
+    vm_emit_umo(gInstructions[VMI_NEG64_DST_MEM], program, count, reg, offset);
+}
+
+inline static void vm_neg_reg_x64(unsigned char* program, int& count, int reg)
+{
+    vm_emit_ur(gInstructions[VMI_NEG64_DST_REG], program, count, reg);
 }
 
 //==================================
@@ -913,6 +943,8 @@ void JIT_FlowGraph::ConsumeInstruction(unsigned char* ins, unsigned int& pc)
         pc++;
         break;
     case OP_YIELD:
+        pc += 2; // ins (byte) + numArgs (int)
+        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_DONE:
         pc++;
@@ -1107,11 +1139,11 @@ struct StackItem
 class VirtualStack
 {
 public:
-    VirtualStack() : pos(0) { }
+    VirtualStack() : pos(32) { }
 
     int Local()
     {
-        pos -= 8;   // 8 bytes
+        pos += 8;   // 8 bytes
         return pos;
     }
 
@@ -1122,22 +1154,22 @@ public:
         item.pos = pos;
         item.type = type;
         item.flags = 0;
-        item.reg = VM_REGISTER_EBP;
+        item.reg = VM_REGISTER_ESP;
     }
 
-    int Push_Stack(int type)
-    {
-        pos -= 8;   // 8 bytes
+    //int Push_Stack(int type)
+    //{
+    //    pos -= 8;   // 8 bytes
 
-        auto& item = stack.emplace_back();
-        item.store = ST_STACK;
-        item.pos = pos;
-        item.type = type;
-        item.flags = SF_PUSH;
-        item.reg = VM_REGISTER_EBP;
+    //    auto& item = stack.emplace_back();
+    //    item.store = ST_STACK;
+    //    item.pos = pos;
+    //    item.type = type;
+    //    item.flags = SF_PUSH;
+    //    item.reg = VM_REGISTER_EBP;
 
-        return item.pos;
-    }
+    //    return item.pos;
+    //}
 
     void Push_Register(int reg, int type)
     {
@@ -1147,6 +1179,18 @@ public:
         item.type = type;
         item.flags = 0;
         item.pos = 0;
+    }
+
+    void Mov(int dst, int src)
+    {
+        for (int i = 0; i < stack.size(); i++)
+        {
+            if (stack[i].reg == src)
+            {
+                stack[i].reg = dst;
+                break;
+            }
+        }
     }
 
     void Peek(int depth, StackItem* item)
@@ -1164,7 +1208,7 @@ public:
         stack.erase(stack.begin() + stack.size() - 1);
         if ((item.flags & SF_PUSH) == SF_PUSH)
         {
-            pos += 8;   // 8 bytes
+            pos -= 8;   // 8 bytes
         }
 
         return item;
@@ -1259,7 +1303,24 @@ public:
         uint64_t* header = reinterpret_cast<uint64_t*>(_memory + _pos);
         *header = 1ULL;
          _pos += 8;
-         return _memory + _pos;
+         unsigned char* mem = _memory + _pos;
+         _pos += totalSize;
+         return mem;
+    }
+
+    void Dump()
+    {
+        // Dump memory to the console.
+        std::cout << std::endl;
+
+        for (int i = 0; i < _pos; i++)
+        {
+            std::cout << std::format("0x{:x}", _memory[i]) << " ";
+            if ((i+1) % 16 == 0)
+            {
+                std::cout << std::endl;
+            }
+        }
     }
 
     void AddRef(void* mem)
@@ -1336,11 +1397,24 @@ private:
     std::unordered_map<std::string, JIT_Method*> _cache;
 };
 
+class JIT_Coroutine
+{
+public:
+    void* _vm_stub;
+    void* _vm_yielded;
+    void* _vm_suspend;
+    void* _yield_resume;
+    void* _vm_resume;
+    long long _stackPtr;
+    long long _stackSize;
+};
+
 class JIT_Manager
 {
 public:
     JIT_MemoryManager _mm;
     JIT_Cache _cache;
+    JIT_Coroutine _co;
 };
 
 class Jitter
@@ -1594,9 +1668,15 @@ static void vm_jit_call_internal_x64(Jitter* jitter, int numParams, void* addres
     jitter->allocator.Free(VM_REGISTER_ECX);
 }
 
-static void vm_jit_spill_register(Jitter* jitter)
+static void vm_jit_spill_register(Jitter* jitter, int reg)
 {
-    
+    if (jitter->allocator.IsUsed(reg))
+    {
+        const int spill = jitter->allocator.Allocate();
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, spill, reg);
+
+        jitter->stack.Mov(spill, reg);
+    }
 }
 
 static std::string vm_jit_read_string(unsigned char* program, unsigned int* pc)
@@ -1649,7 +1729,7 @@ static void vm_jit_pop(Jitter* jitter)
         {
             const int reg = jitter->allocator.Allocate();
             vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, it.reg, it.pos);
-            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_EBP, local.pos, reg);
+            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, local.pos, reg);
             jitter->allocator.Free(reg);
 
             local.type = it.type;
@@ -1657,7 +1737,7 @@ static void vm_jit_pop(Jitter* jitter)
     }
     else if (it.store == ST_REG)
     {
-        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_EBP, local.pos, it.reg);
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, local.pos, it.reg);
         jitter->allocator.Free(it.reg);
 
         local.type = it.type;
@@ -1865,7 +1945,7 @@ static void vm_jit_jump(Jitter* jitter)
             auto& jump = jitter->_method->_backwardJumps[i];
             if (offset + *jitter->pc == jump._target)
             {
-                const int imm = jump._pos - *jitter->pc;
+                const int imm = jump._pos - (jitter->count + 2 /*Length of jump instruction*/);
                 vm_jit_jump(jitter, jump._type, jitter->count, imm);
                 break;
             }
@@ -2038,17 +2118,36 @@ static void vm_jit_div(Jitter* jitter)
 {
     if (jitter->stack.Size() >= 2)
     {
-        const StackItem i1 = jitter->stack.Pop();
-        const StackItem i2 = jitter->stack.Pop();
+        StackItem i1;
+        StackItem i2;
+
+        jitter->stack.Peek(0, &i1);
+        jitter->stack.Peek(1, &i2);
 
         if (i1.type == TY_INT && i2.type == TY_INT)
         {
             if (i1.store == ST_REG && i2.store == ST_REG)
             {
-                //vm_div_reg(jitter->table, jitter->jit, jitter->count, reg1, reg2);
+                vm_jit_spill_register(jitter, VM_REGISTER_EAX);
+                vm_jit_spill_register(jitter, VM_REGISTER_EDX);
 
-                //jitter->allocator.Free(reg2);
-                //jitter->stack.push(reg1);
+                i1 = jitter->stack.Pop();
+                i2 = jitter->stack.Pop();
+
+                vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, i1.reg);
+                vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EDX, 0);
+                vm_div_reg_x64(jitter->jit, jitter->count, i2.reg);
+
+                jitter->allocator.Free(VM_REGISTER_EDX);
+                jitter->allocator.Free(VM_REGISTER_EAX);
+
+                jitter->allocator.Free(i2.reg);
+                jitter->allocator.Free(i1.reg);
+                jitter->stack.Push_Register(VM_REGISTER_EAX, TY_INT);
+            }
+            else if (i1.store == ST_STACK && i2.store == ST_REG)
+            {
+
             }
         }
         else
@@ -2133,6 +2232,35 @@ static void vm_jit_inc(Jitter* jitter)
     {
         // Error
         jitter->SetError();
+    }
+}
+
+static void vm_jit_neg(Jitter* jitter)
+{
+    if (jitter->stack.Size() >= 1)
+    {
+        const StackItem item = jitter->stack.Pop();
+        if (item.type == TY_INT)
+        {
+            if (item.store == ST_REG)
+            {
+                vm_neg_reg_x64(jitter->jit, jitter->count, item.reg);
+                jitter->stack.Push_Register(item.reg, item.type);
+            }
+            else if (item.store == ST_STACK)
+            {
+                const int reg = jitter->allocator.Allocate();
+                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, item.reg, item.pos);
+
+                vm_neg_reg_x64(jitter->jit, jitter->count, reg);
+                jitter->stack.Push_Register(reg, item.type);
+            }
+        }
+        else
+        {
+            // Error
+            jitter->SetError();
+        }
     }
 }
 
@@ -2415,11 +2543,12 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
 
 static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
 {
-    const int numParams = vm_jit_read_int(jitter->program, jitter->pc);
+    const int numParams = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
     char* name = (char*)&jitter->program[*jitter->pc];
     (*jitter->pc) += unsigned int(strlen(name)) + 1;
 
-    // First we we do call_x64
+    // First we do call_x64
     vm_jit_call_x64(vm, jitter, numParams, name);
 
     // Then we make a call to 'vm_yield'.
@@ -2427,22 +2556,20 @@ static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
     // Then we will copy the stack from the initial entry point in the Sunscript to the heap.
     // Then we will set the vm state to paused and move the stack pointer upwards and jump to code which invoked sunscript.
     // Volatile register will be pushed to the stack before where the instruction pointer ends (hopefully this will preserve the registers)
-
+    vm_jit_call_internal_x64(jitter, 0, jitter->_manager->_co._vm_suspend, TY_VOID);
 
     // Upon resuming we need to copy the stack back from the heap and the jump back to the resumption point.
 }
 
-inline static void vm_jit_epilog(Jitter* jitter)
+inline static void vm_jit_epilog(Jitter* jitter, const int stacksize)
 {
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, VM_REGISTER_EBP);
+    vm_add_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize);
     vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EBX);
     vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EDX);
-    vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EBP);
-    vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_ESP);
     vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EDI);
 }
 
-static void vm_jit_return(Jitter* jitter)
+static void vm_jit_return(Jitter* jitter, const int stacksize)
 {
     // Handle return value
     if (jitter->stack.Size() > 0)
@@ -2461,12 +2588,12 @@ static void vm_jit_return(Jitter* jitter)
         }
     }
 
-    vm_jit_epilog(jitter);
+    vm_jit_epilog(jitter, stacksize);
     vm_return(jitter->jit, jitter->count);
     jitter->running = false;
 }
 
-static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock* block)
+static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock* block, const int stacksize)
 {
     for (auto& edge : block->Edges())
     {
@@ -2513,6 +2640,9 @@ static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock
         case OP_PUSH_LOCAL:
             vm_jit_push_local(jitter);
             break;
+        case OP_UNARY_MINUS:
+            vm_jit_neg(jitter);
+            break;
         case OP_ADD:
             vm_jit_add(jitter);
             break;
@@ -2532,12 +2662,12 @@ static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock
             vm_jit_dec(jitter);
             break;
         case OP_DONE:
-            vm_jit_epilog(jitter);
+            vm_jit_epilog(jitter, stacksize);
             vm_return(jitter->jit, jitter->count);
             jitter->running = false;
             break;
         case OP_RETURN:
-            vm_jit_return(jitter);
+            vm_jit_return(jitter, stacksize);
             break;
         case OP_POP_DISCARD:
             // ignore
@@ -2553,8 +2683,6 @@ static void vm_jit_generate(VirtualMachine* vm, Jitter* jitter)
     // Store volatile registers
 
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EDI);
-    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_ESP);
-    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EBP);
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EDX);
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EBX);
 
@@ -2590,7 +2718,6 @@ static void vm_jit_generate(VirtualMachine* vm, Jitter* jitter)
 
     const int stacksize = VM_ALIGN_16(int(jitter->info.locals.size()) * 8 /* Locals */ + 32 /* 4 register homes for callees */);
 
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EBP, VM_REGISTER_ESP);
     vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize); // grow stack
 
     // Inject logic to capture metric data
@@ -2601,9 +2728,178 @@ static void vm_jit_generate(VirtualMachine* vm, Jitter* jitter)
     BasicBlock* blk = jitter->fg.Head();
     while (jitter->running && blk)
     {
-        vm_jit_generate_block(vm, jitter, blk);
+        vm_jit_generate_block(vm, jitter, blk, stacksize);
         blk = blk->Next();
     }
+}
+
+void vm_jit_suspend(JIT_Manager* manager)
+{
+    unsigned char jit[1024];
+    int count = 0;
+    
+    // Store volatile registers
+
+    vm_push_reg(jit, count, VM_REGISTER_EDI);
+    vm_push_reg(jit, count, VM_REGISTER_EDX);
+    vm_push_reg(jit, count, VM_REGISTER_EBX);
+
+
+    const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */);
+
+    vm_sub_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize); // grow stack
+
+    // TODO: dynamically reserve
+    void* mem = manager->_mm.New(2048);
+
+    // Calculate stack size
+    // StackPtr - ESP
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R8, (long long)&manager->_co._stackPtr);
+    vm_mov_memory_to_reg_x64(jit, count, VM_REGISTER_R8, VM_REGISTER_R8, 0);
+    vm_sub_reg_to_reg_x64(jit, count, VM_REGISTER_R8, VM_REGISTER_ESP);
+
+    // Store stack size - for resumption
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, (long long)&manager->_co._stackSize);
+    vm_mov_reg_to_memory_x64(jit, count, VM_REGISTER_EAX, 0, VM_REGISTER_R8);
+
+    // Generate a call to memcpy
+    // Dst (ECX = mem)
+    // Src (EDX = ESP)
+    // Size (R8 = size)
+
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_ECX, (long long)mem);
+    vm_mov_reg_to_reg_x64(jit, count, VM_REGISTER_EDX, VM_REGISTER_ESP);
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, (long long)&std::memcpy);
+    vm_call_absolute(jit, count, VM_REGISTER_EAX);
+
+    // Now we go back to the past
+    // 1) Reset the ESP register
+
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, (long long)&manager->_co._stackPtr);
+    vm_mov_memory_to_reg_x64(jit, count, VM_REGISTER_ESP, VM_REGISTER_EAX, 0);
+    
+    // 2) Jump to the return point
+
+    void* stub = (unsigned char*) manager->_co._yield_resume;
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, (long long)stub);
+    vm_jump_absolute(jit, count, VM_REGISTER_EAX);
+
+    // Record the resumption point.
+
+    const int resume = count;
+
+    // Update the ESP to point to the bottom
+
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R8, (long long)&manager->_co._stackSize);
+    vm_sub_memory_to_reg_x64(jit, count, VM_REGISTER_ESP, VM_REGISTER_R8, 0);
+    vm_sub_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, -8);     // make an adjustment (for some reason?)
+
+    // Now we restore the stack
+    // Dst (ECX = VM_REGISTER_ESP)
+    // Src (EDX = mem)
+    // Size (R8 = size)
+
+    vm_mov_memory_to_reg_x64(jit, count, VM_REGISTER_R8, VM_REGISTER_R8, 0);
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EDX, (long long)mem);
+    vm_mov_reg_to_reg_x64(jit, count, VM_REGISTER_ECX, VM_REGISTER_ESP);
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, (long long)&std::memcpy);
+    vm_call_absolute(jit, count, VM_REGISTER_EAX);
+
+    // Epilogue
+
+    vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize);
+    vm_pop_reg(jit, count, VM_REGISTER_EBX);
+    vm_pop_reg(jit, count, VM_REGISTER_EDX);
+    vm_pop_reg(jit, count, VM_REGISTER_EDI);
+    vm_return(jit, count);
+
+    // Finalize
+
+    manager->_co._vm_suspend = vm_allocate(count);
+    vm_initialize(manager->_co._vm_suspend, jit, count);
+
+    manager->_co._vm_resume = (unsigned char*)manager->_co._vm_suspend + resume;
+}
+
+void vm_jit_yielded(JIT_Manager* manager)
+{
+    unsigned char jit[1024];
+    int count = 0;
+
+    // Store volatile registers
+
+    vm_push_reg(jit, count, VM_REGISTER_EDI);
+    vm_push_reg(jit, count, VM_REGISTER_EDX);
+    vm_push_reg(jit, count, VM_REGISTER_EBX);
+
+    const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */);
+
+    vm_sub_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize); // grow stack
+
+    // Record resume point
+
+    const int resumePosition = count;
+
+    // Return value - VM_YIELDED
+
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, VM_YIELDED);
+
+    // Epilogue
+
+    vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize);
+    vm_pop_reg(jit, count, VM_REGISTER_EBX);
+    vm_pop_reg(jit, count, VM_REGISTER_EDX);
+    vm_pop_reg(jit, count, VM_REGISTER_EDI);
+    vm_return(jit, count);
+
+    // Finalize
+
+    manager->_co._vm_yielded = vm_allocate(count);
+    vm_initialize(manager->_co._vm_yielded, jit, count);
+
+    manager->_co._yield_resume = (unsigned char*)manager->_co._vm_yielded + resumePosition;
+}
+
+void vm_jit_entry_stub(JIT_Manager* manager)
+{
+    unsigned char jit[1024];
+    int count = 0;
+
+    // Store volatile registers
+
+    vm_push_reg(jit, count, VM_REGISTER_EDI);
+    vm_push_reg(jit, count, VM_REGISTER_EDX);
+    vm_push_reg(jit, count, VM_REGISTER_EBX);
+
+    const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */);
+
+    vm_sub_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize); // grow stack
+
+    // Record the stack pointer
+
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EDX, (long long)&manager->_co._stackPtr);
+    vm_mov_reg_to_memory_x64(jit, count, VM_REGISTER_EDX, 0, VM_REGISTER_ESP);
+
+    // Call the start method
+    
+    vm_call_absolute(jit, count, VM_REGISTER_ECX);
+
+    // Return value - VM_OK
+
+    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, VM_OK);
+
+    // Epilogue
+
+    vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize);
+    vm_pop_reg(jit, count, VM_REGISTER_EBX);
+    vm_pop_reg(jit, count, VM_REGISTER_EDX);
+    vm_pop_reg(jit, count, VM_REGISTER_EDI);
+    vm_return(jit, count);
+
+    // Finalize
+
+    manager->_co._vm_stub = vm_allocate(count);
+    vm_initialize(manager->_co._vm_stub, jit, count);
 }
 
 //========================
@@ -2613,6 +2909,7 @@ void SunScript::JIT_Setup(Jit* jit)
     jit->jit_initialize = SunScript::JIT_Initialize;
     jit->jit_compile = SunScript::JIT_Compile;
     jit->jit_execute = SunScript::JIT_Execute;
+    jit->jit_resume = SunScript::JIT_Resume;
     jit->jit_search_cache = SunScript::JIT_SearchCache;
     jit->jit_cache = SunScript::JIT_CacheData;
     jit->jit_stats = SunScript::JIT_Stats;
@@ -2621,7 +2918,11 @@ void SunScript::JIT_Setup(Jit* jit)
 
 void* SunScript::JIT_Initialize()
 {
-    return new JIT_Manager();
+    JIT_Manager* manager = new JIT_Manager();
+    vm_jit_entry_stub(manager); // must generate stub before suspend
+    vm_jit_yielded(manager);    // must generate yielded before suspend
+    vm_jit_suspend(manager);
+    return manager;
 }
 
 void* SunScript::JIT_Compile(void* instance, VirtualMachine* vm, unsigned char* program, const FunctionInfo& info, const std::string& signature)
@@ -2669,13 +2970,23 @@ void* SunScript::JIT_Compile(void* instance, VirtualMachine* vm, unsigned char* 
     return jitter->_method;
 }
 
-int SunScript::JIT_Execute(void* data)
+int SunScript::JIT_Execute(void* instance, void* data)
 {
+    JIT_Manager* mm = reinterpret_cast<JIT_Manager*>(instance);
     JIT_Method* method = reinterpret_cast<JIT_Method*>(data);
 
-    vm_execute(method->_jit_data);
+    //vm_execute(method->_jit_data);
+    int(*fn)(void*) = (int(*)(void*))((unsigned char*)mm->_co._vm_stub);
+    return fn(method->_jit_data);
+}
 
-    return VM_OK;
+int SunScript::JIT_Resume(void* instance)
+{
+    JIT_Manager* mm = reinterpret_cast<JIT_Manager*>(instance);
+    //mm->_mm.Dump();
+
+    int(*fn)(void*) = (int(*)(void*))((unsigned char*)mm->_co._vm_stub);
+    return fn(mm->_co._vm_resume);
 }
 
 void* SunScript::JIT_SearchCache(void* instance, const std::string& key)
