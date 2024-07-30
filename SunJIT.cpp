@@ -868,7 +868,7 @@ public:
 
 private:
     void ConsumeInstruction(unsigned char* ins, unsigned int& pc);
-    void ScanJumps(unsigned char* ins, unsigned int pc);
+    void ScanJumps(unsigned char* ins, unsigned int pc, unsigned int size);
     void ProcessBlocks();
     
     BasicBlock* _head;
@@ -952,13 +952,14 @@ void JIT_FlowGraph::ConsumeInstruction(unsigned char* ins, unsigned int& pc)
     }
 }
 
-void JIT_FlowGraph::ScanJumps(unsigned char* ins, unsigned int pc)
+void JIT_FlowGraph::ScanJumps(unsigned char* ins, unsigned int pc, unsigned int size)
 {
     short pos;
     char type;
     bool done = false;
     const int offset = pc;
-    while (!done)
+    const unsigned int end = pc + size;
+    while (!done && pc < end)
     {
         switch (ins[pc])
         {
@@ -972,9 +973,6 @@ void JIT_FlowGraph::ScanJumps(unsigned char* ins, unsigned int pc)
         case OP_DONE:
             done = true;
             break;
-        case OP_RETURN:
-            done = true;
-            break;
         default:
             ConsumeInstruction(ins, pc);
             break;
@@ -985,12 +983,13 @@ void JIT_FlowGraph::ScanJumps(unsigned char* ins, unsigned int pc)
 void JIT_FlowGraph::Init(unsigned char* ins, unsigned int pc, unsigned int size)
 {
     _jumpMask.Init(size);
-    ScanJumps(ins, pc);
+    ScanJumps(ins, pc, size);
 
     BasicBlockDescriptor desc {};
     desc._begin = pc;
 
     const int offset = pc;
+    const unsigned int end = pc + size;
     bool done = false;
     while (!done)
     {
@@ -1017,7 +1016,6 @@ void JIT_FlowGraph::Init(unsigned char* ins, unsigned int pc, unsigned int size)
             pc++;
             desc._end = pc;
             createBlock = true;
-            done = true;
             break;
         default:
             ConsumeInstruction(ins, pc);
@@ -1028,6 +1026,13 @@ void JIT_FlowGraph::Init(unsigned char* ins, unsigned int pc, unsigned int size)
         {
             desc._end = pc;
             createBlock = true;
+        }
+
+        if (pc == end)
+        {
+            desc._end = pc;
+            createBlock = true;
+            done = true;
         }
 
         if (createBlock)
@@ -1472,12 +1477,12 @@ void vm_initialize(void* data, unsigned char* jit, int size)
     }
 }
 
-void vm_execute(void* data)
-{
-    int(*fn)(void) = (int(*)(void))((unsigned char*)data);
-    int result = fn();
-
-}
+//void vm_execute(void* data)
+//{
+//    int(*fn)(void) = (int(*)(void))((unsigned char*)data);
+//    int result = fn();
+//
+//}
 
 void vm_free(void* data, int size)
 {
@@ -2041,8 +2046,11 @@ static void vm_jit_sub(Jitter* jitter)
             }
             else if (i2.store == ST_REG && i1.store == ST_STACK)
             {
-                vm_sub_memory_to_reg_x64(jitter->jit, jitter->count, i2.reg, i1.reg, i1.pos);
-                jitter->stack.Push_Register(i2.reg, TY_INT);
+                const int reg = jitter->allocator.Allocate();
+                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, i1.reg, i1.pos);
+                vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, reg, i2.reg);
+                jitter->stack.Push_Register(reg, TY_INT);
+                jitter->allocator.Free(i2.reg);
             }
             else if (i1.store == ST_STACK && i2.store == ST_STACK)
             {
@@ -2539,6 +2547,9 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
     (*jitter->pc) += unsigned int(strlen(name)) + 1;
 
     vm_jit_call_x64(vm, jitter, numParams, name);
+
+    // Push return value
+    jitter->stack.Push_Register(VM_REGISTER_EAX, TY_INT);
 }
 
 static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
@@ -2590,7 +2601,14 @@ static void vm_jit_return(Jitter* jitter, const int stacksize)
 
     vm_jit_epilog(jitter, stacksize);
     vm_return(jitter->jit, jitter->count);
-    jitter->running = false;
+}
+
+static void vm_jit_pop_discard(Jitter* jitter)
+{
+    if (jitter->stack.Size() > 0)
+    {
+        jitter->stack.Pop();
+    }
 }
 
 static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock* block, const int stacksize)
@@ -2670,7 +2688,7 @@ static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock
             vm_jit_return(jitter, stacksize);
             break;
         case OP_POP_DISCARD:
-            // ignore
+            vm_jit_pop_discard(jitter);
             break;
         default:
             abort();
