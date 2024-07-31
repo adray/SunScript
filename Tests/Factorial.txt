@@ -7,3 +7,7 @@ function factorial(x) {
 var x = factorial(5);
 
 assert(120, x);
+
+x = factorial(5) + factorial(5) + factorial(5);
+
+assert(360, x);

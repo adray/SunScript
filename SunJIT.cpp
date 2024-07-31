@@ -202,15 +202,18 @@ static void vm_emit(const vm_instruction& ins, unsigned char* program, int& coun
 static void vm_emit_ur(const vm_instruction& ins, unsigned char* program, int& count, char reg)
 {
     assert(ins.code == CODE_UR);
-    if (ins.rex > 0) { program[count++] = ins.rex; }
+    if (ins.rex > 0)
+    {
+        program[count++] = ins.rex | (reg >= VM_REGISTER_R8 ? 0x1 : 0x0);
+    }
     if (ins.subins > 0)
     {
         program[count++] = ins.ins;
-        program[count++] = (ins.subins << 3) | (reg & 0x7) | (0x3 << 6);
+        program[count++] = (ins.subins << 3) | ((reg % 8) & 0x7) | (0x3 << 6);
     }
     else
     {
-        program[count++] = ins.ins | (reg & 0x7);
+        program[count++] = ins.ins | ((reg % 8) & 0x7);
     }
 }
 
@@ -1089,6 +1092,7 @@ public:
         if (!registers[reg])
         {
             registers[reg] = true;
+            //std::cout << "Alloc " << reg << std::endl;
             return reg;
         }
 
@@ -1102,6 +1106,7 @@ public:
             if (!registers[i])
             {
                 registers[i] = true;
+                //std::cout << "Alloc " << i << std::endl;
                 return i;
             }
         }
@@ -1117,6 +1122,7 @@ public:
     void Free(int reg)
     {
         registers[reg] = false;
+        //std::cout << "Free " << reg << std::endl;
     }
 private:
     bool registers[VM_REGISTER_MAX];
@@ -1681,6 +1687,9 @@ static void vm_jit_spill_register(Jitter* jitter, int reg)
         vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, spill, reg);
 
         jitter->stack.Mov(spill, reg);
+        
+        // NOTE: we don't free this register in case we need to spill more
+        // and we don't want to spill them into registers we just freed.
     }
 }
 
@@ -2499,6 +2508,8 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
         {
             if (item.reg != registers[i])
             {
+                vm_jit_spill_register(jitter, registers[i]);
+
                 vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, registers[i], item.reg);
 
                 jitter->allocator.Free(item.reg);
@@ -2509,6 +2520,7 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
         }
         else if (item.store == ST_STACK)
         {
+            vm_jit_spill_register(jitter, registers[i]);
             vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, registers[i], item.reg, item.pos);
 
             jitter->allocator.Allocate(registers[i]);
@@ -2548,7 +2560,11 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
 
     vm_jit_call_x64(vm, jitter, numParams, name);
 
+    // This register is probably nuked anyway?
+    vm_jit_spill_register(jitter, VM_REGISTER_EAX);
+
     // Push return value
+    jitter->allocator.Allocate(VM_REGISTER_EAX);
     jitter->stack.Push_Register(VM_REGISTER_EAX, TY_INT);
 }
 
@@ -2607,7 +2623,11 @@ static void vm_jit_pop_discard(Jitter* jitter)
 {
     if (jitter->stack.Size() > 0)
     {
-        jitter->stack.Pop();
+        StackItem i = jitter->stack.Pop();
+        if (i.store == ST_REG)
+        {
+            jitter->allocator.Free(i.reg);
+        }
     }
 }
 
@@ -2630,6 +2650,7 @@ static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock
 
     while (jitter->running && *jitter->pc < block->EndPos())
     {
+        //std::cout << "INS " << *jitter->pc << std::endl;
         const int ins = jitter->program[(*(jitter->pc))++];
 
         switch (ins)
