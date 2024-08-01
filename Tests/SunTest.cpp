@@ -6,6 +6,7 @@
 #include <iostream>
 #include <sstream>
 #include <filesystem>
+#include <chrono>
 
 using namespace SunScript;
 
@@ -113,6 +114,9 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     unsigned char* program;
     CompileFile(test->_filename, &program);
 
+    std::chrono::steady_clock clock;
+    auto startTime = clock.now().time_since_epoch();
+
     if (program)
     {
         int errorCode = RunScript(vm, program);
@@ -126,6 +130,8 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
         test->_failed = true;
     }
 
+    auto elapsedTime = clock.now().time_since_epoch() - startTime;
+
     delete[] program;
     ShutdownVirtualMachine(vm);
 
@@ -137,7 +143,12 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     }
     else
     {
-        std::cout << " SUCCESS" << std::endl;
+        std::cout << " SUCCESS " << elapsedTime.count() << "ns";
+        if (test->_jit) {
+            std::cout << " [JIT]";
+        }
+        std::cout << std::endl;
+
         return VM_OK;
     }
 }
