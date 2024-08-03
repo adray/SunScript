@@ -862,31 +862,7 @@ bool JIT_BitField::GetBit(const int pos)
 // Flow graph
 //==================================
 
-class JIT_FlowGraph
-{
-public:
-    JIT_FlowGraph();
-    void Init(unsigned char* ins, unsigned int pc, unsigned int size);
-    inline BasicBlock* Head() { return _head; }
-
-private:
-    void ConsumeInstruction(unsigned char* ins, unsigned int& pc);
-    void ScanJumps(unsigned char* ins, unsigned int pc, unsigned int size);
-    void ProcessBlocks();
-    
-    BasicBlock* _head;
-    BasicBlock* _tail;
-    JIT_BitField _jumpMask;
-};
-
-JIT_FlowGraph::JIT_FlowGraph()
-    :
-    _head(nullptr),
-    _tail(nullptr)
-{
-}
-
-void JIT_FlowGraph::ConsumeInstruction(unsigned char* ins, unsigned int& pc)
+static void ConsumeInstruction(unsigned char* ins, unsigned int& pc)
 {
     char type;
 
@@ -954,6 +930,99 @@ void JIT_FlowGraph::ConsumeInstruction(unsigned char* ins, unsigned int& pc)
         break;
     }
 }
+
+class JIT_FlowGraph
+{
+public:
+    JIT_FlowGraph();
+    void Init(unsigned char* ins, unsigned int pc, unsigned int size);
+    inline BasicBlock* Head() { return _head; }
+
+private:
+    //void ConsumeInstruction(unsigned char* ins, unsigned int& pc);
+    void ScanJumps(unsigned char* ins, unsigned int pc, unsigned int size);
+    void ProcessBlocks();
+    
+    BasicBlock* _head;
+    BasicBlock* _tail;
+    JIT_BitField _jumpMask;
+};
+
+JIT_FlowGraph::JIT_FlowGraph()
+    :
+    _head(nullptr),
+    _tail(nullptr)
+{
+}
+
+/*void JIT_FlowGraph::ConsumeInstruction(unsigned char* ins, unsigned int& pc)
+{
+    char type;
+
+    switch (ins[pc])
+    {
+    case OP_ADD:
+    case OP_SUB:
+    case OP_MUL:
+    case OP_DIV:
+        pc++;
+        break;
+    case OP_PUSH:
+        pc++;
+        type = ins[pc];
+        if (type == TY_INT)
+        {
+            pc += 4;
+        }
+        else if (type == TY_STRING)
+        {
+            pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        }
+        break;
+    case OP_CALL:
+        pc += 5; // ins (byte) + numArgs (int)
+        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        break;
+    case OP_CMP:
+        pc++;
+        break;
+    case OP_JUMP:
+        pc += 4;
+        break;
+    case OP_DECREMENT:
+    case OP_INCREMENT:
+        pc++;
+        break;
+    case OP_LOCAL:
+        pc++;
+        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        break;
+    case OP_POP:
+        pc++;
+        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        break;
+    case OP_POP_DISCARD:
+        pc++;
+        break;
+    case OP_PUSH_LOCAL:
+        pc++;
+        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        break;
+    case OP_RETURN:
+        pc++;
+        break;
+    case OP_UNARY_MINUS:
+        pc++;
+        break;
+    case OP_YIELD:
+        pc += 2; // ins (byte) + numArgs (int)
+        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        break;
+    case OP_DONE:
+        pc++;
+        break;
+    }
+}*/
 
 void JIT_FlowGraph::ScanJumps(unsigned char* ins, unsigned int pc, unsigned int size)
 {
@@ -1289,85 +1358,6 @@ struct JIT_Method
     uint64_t _runCount;      // number of times the method has been invoked
 };
 
-class JIT_MemoryManager
-{
-public:
-
-    JIT_MemoryManager() : _memory(nullptr), _pos(0), _totalSize(0) {}
-
-    void* New(uint64_t size)
-    {
-        const uint64_t totalSize = VM_ALIGN_16(size + 8);
-        if (_memory == nullptr)
-        {
-            // Allocate 2MB to start with
-            _totalSize = 2 * 1024 * 1024;
-            _memory = new unsigned char[_totalSize];
-            std::memset(_memory, 0, _totalSize);
-        }
-        else if (_pos + totalSize >= _totalSize)
-        {
-            // TODO: reallocate with larger size
-            return nullptr;
-        }
-
-        uint64_t* header = reinterpret_cast<uint64_t*>(_memory + _pos);
-        *header = 1ULL;
-         _pos += 8;
-         unsigned char* mem = _memory + _pos;
-         _pos += totalSize;
-         return mem;
-    }
-
-    void Dump()
-    {
-        // Dump memory to the console.
-        std::cout << std::endl;
-
-        for (int i = 0; i < _pos; i++)
-        {
-            std::cout << std::format("0x{:x}", _memory[i]) << " ";
-            if ((i+1) % 16 == 0)
-            {
-                std::cout << std::endl;
-            }
-        }
-    }
-
-    void AddRef(void* mem)
-    {
-        unsigned char* end = _memory + _totalSize;
-        if (mem >= _memory && mem < end)
-        {
-            uint64_t* header = reinterpret_cast<uint64_t*>(_memory + _pos - 8);
-            (*header)++;
-        }
-    }
-
-    void Release(void* mem)
-    {
-        unsigned char* end = _memory + _totalSize;
-        if (mem >= _memory && mem < end)
-        {
-            uint64_t* header = reinterpret_cast<uint64_t*>(_memory + _pos - 8);
-            (*header)--;
-
-            // TODO: add to free list.
-        }
-    }
-
-    ~JIT_MemoryManager()
-    {
-        delete[] _memory;
-        _memory = nullptr;
-    }
-
-private:
-    unsigned char* _memory;
-    uint64_t _pos;
-    uint64_t _totalSize;
-};
-
 class JIT_Cache
 {
 public:
@@ -1423,7 +1413,7 @@ public:
 class JIT_Manager
 {
 public:
-    JIT_MemoryManager _mm;
+    MemoryManager _mm;
     JIT_Cache _cache;
     JIT_Coroutine _co;
 };
@@ -1441,7 +1431,7 @@ public:
     JIT_Method* _method;
     JIT_Manager* _manager;
     JIT_FlowGraph fg;
-    FunctionInfo info;
+    FunctionInfo* info;
     int argsProcessed;
     bool running;
     bool error;
@@ -1534,12 +1524,19 @@ extern "C"
         InvokeHandler(vm, name, numArgs);
     }
 
+    static void* vm_box_int(JIT_Manager* man, int value)
+    {
+        int* mem = (int*)man->_mm.New(sizeof(int64_t), TY_INT);
+        *mem = value;
+        return mem;
+    }
+
     static char* vm_append_string_int(JIT_Manager* man, char* left, int right)
     {
         std::stringstream ss;
         ss << left << right;
         std::string str = ss.str();
-        char* data = (char*)man->_mm.New(str.length() + 1);
+        char* data = (char*)man->_mm.New(str.length() + 1, TY_STRING);
         std::memcpy(data, str.c_str(), str.length());
         data[str.length()] = '\0';
         return data;
@@ -1550,7 +1547,7 @@ extern "C"
         std::stringstream ss;
         ss << left << right;
         std::string s = ss.str();
-        char* data = (char*)man->_mm.New(s.length() + 1);
+        char* data = (char*)man->_mm.New(s.length() + 1, TY_STRING);
         std::memcpy(data, s.c_str(), s.length());
         data[s.length()] = '\0';
         return data;
@@ -1561,7 +1558,7 @@ extern "C"
         std::stringstream ss;
         ss << left << right;
         std::string s = ss.str();
-        char* data = (char*)man->_mm.New(s.length() + 1);
+        char* data = (char*)man->_mm.New(s.length() + 1, TY_STRING);
         std::memcpy(data, s.c_str(), s.length());
         data[s.length()] = '\0';
         return data;
@@ -1583,8 +1580,8 @@ extern "C"
         void* data = mm->_cache.SearchJITCache(stub->_cacheKey);
         if (!data)
         {
-            FunctionInfo info;
-            if (VM_OK == FindFunction(vm, stub->_name, info))
+            FunctionInfo* info;
+            if (VM_OK == FindFunction(vm, stub->_name, &info))
             {
                 data = JIT_Compile(mm, vm, GetLoadedProgram(vm), info, stub->_signature);
                 cache = true;
@@ -2460,6 +2457,7 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
 
     bool shouldPatch = false;
     JIT_Method* method = reinterpret_cast<JIT_Method*>(jitter->_manager->_cache.SearchJITCache(key.str()));
+    char returnType = TY_VOID;
 
     if (!method)
     {
@@ -2473,13 +2471,16 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
         method->_cacheKey = key.str();
         method->_jumpPos = 0;
 
-        FunctionInfo info;
-        if (FindFunction(vm, name, info) == VM_OK)
+        FunctionInfo* info;
+        if (FindFunction(vm, name, &info) == VM_OK)
         {
             // Generate a unique stub method for this method.
             method->_jit_data = vm_jit_sun_stub(vm, jitter, method, numParams, name, signature);
             jitter->_manager->_cache.CacheJIT(jitter->_method->_cacheKey + "_" + key.str(), method);
             shouldPatch = true;
+
+            // TODO: handle this properly
+            returnType = TY_INT;
         }
         else
         {
@@ -2548,6 +2549,20 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
         StackItem item = stack.Pop();
         jitter->allocator.Free(item.reg);
     }
+
+    // ======================
+    // Handle return value
+    // ======================
+
+    if (returnType != TY_VOID)
+    {
+        // This register is probably nuked anyway?
+        vm_jit_spill_register(jitter, VM_REGISTER_EAX);
+
+        // Push return value
+        jitter->allocator.Allocate(VM_REGISTER_EAX);
+        jitter->stack.Push_Register(VM_REGISTER_EAX, returnType);
+    }
 }
 
 static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
@@ -2559,13 +2574,6 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
     (*jitter->pc) += unsigned int(strlen(name)) + 1;
 
     vm_jit_call_x64(vm, jitter, numParams, name);
-
-    // This register is probably nuked anyway?
-    vm_jit_spill_register(jitter, VM_REGISTER_EAX);
-
-    // Push return value
-    jitter->allocator.Allocate(VM_REGISTER_EAX);
-    jitter->stack.Push_Register(VM_REGISTER_EAX, TY_INT);
 }
 
 static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
@@ -2596,12 +2604,44 @@ inline static void vm_jit_epilog(Jitter* jitter, const int stacksize)
     vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EDI);
 }
 
+static void vm_jit_box(Jitter* jitter)
+{
+    StackItem item;
+    jitter->stack.Peek(0, &item);
+
+    if (item.store == ST_REG)
+    {
+        switch (item.type)
+        {
+        case TY_INT:
+            vm_jit_call_internal_x64(jitter, 1, (void*)&vm_box_int, TY_OBJECT);
+            break;
+        }
+    }
+    else if (item.store == ST_STACK)
+    {
+        switch (item.type)
+        {
+        case TY_INT:
+            vm_jit_spill_register(jitter, VM_REGISTER_EDX);
+            vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EDX, item.reg, item.pos);
+            jitter->stack.Push_Register(VM_REGISTER_EDX, TY_OBJECT);
+
+            vm_jit_call_internal_x64(jitter, 1, (void*)&vm_box_int, TY_OBJECT);
+            break;
+        }
+    }
+}
+
 static void vm_jit_return(Jitter* jitter, const int stacksize)
 {
     // Handle return value
     if (jitter->stack.Size() > 0)
     {
+        vm_jit_box(jitter);
+
         StackItem item = jitter->stack.Pop();
+
         if (item.store == ST_REG)
         {
             if (item.reg != VM_REGISTER_EAX)
@@ -2755,7 +2795,7 @@ static void vm_jit_generate(VirtualMachine* vm, Jitter* jitter)
         }
     }
 
-    const int stacksize = VM_ALIGN_16(int(jitter->info.locals.size()) * 8 /* Locals */ + 32 /* 4 register homes for callees */);
+    const int stacksize = VM_ALIGN_16(int(jitter->info->locals.size()) * 8 /* Locals */ + 32 /* 4 register homes for callees */);
 
     vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize); // grow stack
 
@@ -2789,7 +2829,7 @@ void vm_jit_suspend(JIT_Manager* manager)
     vm_sub_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize); // grow stack
 
     // TODO: dynamically reserve
-    void* mem = manager->_mm.New(2048);
+    void* mem = manager->_mm.New(2048, TY_OBJECT);
 
     // Calculate stack size
     // StackPtr - ESP
@@ -2941,6 +2981,50 @@ void vm_jit_entry_stub(JIT_Manager* manager)
     vm_initialize(manager->_co._vm_stub, jit, count);
 }
 
+static bool CanJITFunction(VirtualMachine* vm, unsigned int& pc, unsigned char* program)
+{
+    pc += 5;
+    char* str = reinterpret_cast<char*>(&program[pc]);
+    pc += unsigned int(strlen(str)) + 1;
+
+    FunctionInfo* func;
+    const int status = FindFunction(vm, str, &func);
+
+    if (status == VM_OK)
+    {
+        return func->counter >= 1;
+    }
+    return false;
+}
+
+static bool CanJIT(VirtualMachine* vm, unsigned char* program, FunctionInfo* info)
+{
+    bool ok = info->counter > 0;
+    
+    if (ok)
+    {
+        unsigned int pc = info->pc;
+        const unsigned int end = info->pc + info->size;
+        for (unsigned int i = pc; i < end; i++)
+        {
+            switch (program[pc])
+            {
+            case OP_CALL:
+                if (!CanJITFunction(vm, pc, program))
+                {
+                    return false;
+                }
+                break;
+            default:
+                ConsumeInstruction(program, pc);
+                break;
+            }
+        }
+    }
+
+    return ok;
+}
+
 //========================
 
 void SunScript::JIT_Setup(Jit* jit)
@@ -2964,10 +3048,17 @@ void* SunScript::JIT_Initialize()
     return manager;
 }
 
-void* SunScript::JIT_Compile(void* instance, VirtualMachine* vm, unsigned char* program, const FunctionInfo& info, const std::string& signature)
+void* SunScript::JIT_Compile(void* instance, VirtualMachine* vm, unsigned char* program, FunctionInfo* info, const std::string& signature)
 {
+    // Return nullptr is there is no type data
+    // e.g. deoptimize
+    if (!CanJIT(vm, program, info))
+    {
+        return nullptr;
+    }
+
     unsigned char jit[1024];
-    unsigned int pc = info.pc;
+    unsigned int pc = info->pc;
 
     std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
     jitter->program = program;
@@ -2975,13 +3066,13 @@ void* SunScript::JIT_Compile(void* instance, VirtualMachine* vm, unsigned char* 
     jitter->jit = jit;
     jitter->info = info;
     jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
-    jitter->fg.Init(program, pc, info.size);
+    jitter->fg.Init(program, pc, info->size);
 
     jitter->_method = new JIT_Method();
-    jitter->_method->_name = info.name;
+    jitter->_method->_name = info->name;
     jitter->_method->_signature = signature;
     jitter->_method->_runCount = 0;
-    jitter->_method->_cacheKey = info.name + "_" + signature;
+    jitter->_method->_cacheKey = info->name + "_" + signature;
     jitter->_method->_jumpPos = 0;
 
     std::chrono::steady_clock clock;

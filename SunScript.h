@@ -32,6 +32,8 @@ namespace SunScript
     constexpr unsigned char TY_VOID = 0x0;
     constexpr unsigned char TY_INT = 0x1;
     constexpr unsigned char TY_STRING = 0x2;
+    constexpr unsigned char TY_REAL = 0x3;
+    constexpr unsigned char TY_OBJECT = 0x4;
 
     constexpr unsigned char JUMP = 0x0;
     constexpr unsigned char JUMP_E = 0x1;
@@ -44,6 +46,33 @@ namespace SunScript
     struct VirtualMachine;
     struct Program;
     struct ProgramBlock;
+
+    class MemoryManager
+    {
+    private:
+        struct Header
+        {
+            int64_t _refCount;
+            int64_t _size;
+            char _type;
+        };
+
+    public:
+
+        MemoryManager();
+        void* New(uint64_t size, char type);
+        void Dump();
+        void AddRef(void* mem);
+        void Release(void* mem);
+        char GetType(void* mem);
+        void Reset();
+        ~MemoryManager();
+
+    private:
+        unsigned char* _memory;
+        uint64_t _pos;
+        uint64_t _totalSize;
+    };
 
     struct Label
     {
@@ -61,10 +90,29 @@ namespace SunScript
         Callstack* next = nullptr;
     };
 
+    struct ReturnStat
+    {
+        unsigned int pc;
+        unsigned int type;
+        unsigned int count;
+    };
+
+    struct BranchStat
+    {
+        unsigned int pc;
+        unsigned int trueCount;
+        unsigned int falseCount;
+    };
+
     struct FunctionInfo
     {
         unsigned int pc;
         unsigned int size;
+        unsigned int counter;
+        unsigned int retCount;
+        unsigned int branchCount;
+        ReturnStat retStats[8];
+        BranchStat branchStats[8];
         std::string name;
         std::vector<std::string> parameters;
         std::vector<std::string> locals;
@@ -75,7 +123,7 @@ namespace SunScript
     {
         void* (*jit_initialize) (void);
         void* (*jit_compile) (void* instance, VirtualMachine* vm, unsigned char* program, 
-            const FunctionInfo& info, const std::string& signature);
+            FunctionInfo* info, const std::string& signature);
         int (*jit_execute) (void* instance, void* data);
         int (*jit_resume) (void* instance);
         void* (*jit_search_cache) (void* instance, const std::string& key);
@@ -89,6 +137,7 @@ namespace SunScript
     constexpr int VM_YIELDED = 2;
     constexpr int VM_PAUSED = 3;
     constexpr int VM_TIMEOUT = 4;
+    constexpr int VM_DEOPTIMIZE = 5;
 
     constexpr int ERR_NONE = 0;
     constexpr int ERR_INTERNAL = 1;
@@ -177,7 +226,7 @@ namespace SunScript
 
     void InvokeHandler(VirtualMachine* vm, const std::string& callName, int numParams);
 
-    int FindFunction(VirtualMachine* vm, const std::string& callName, FunctionInfo& info);
+    int FindFunction(VirtualMachine* vm, const std::string& callName, FunctionInfo** info);
 
     unsigned char* GetLoadedProgram(VirtualMachine* vm);
 

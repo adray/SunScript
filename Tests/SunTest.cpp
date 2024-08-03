@@ -117,12 +117,23 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     std::chrono::steady_clock clock;
     auto startTime = clock.now().time_since_epoch();
 
+    const int runCount = 1000;
     if (program)
     {
-        int errorCode = RunScript(vm, program);
-        while (errorCode == VM_YIELDED)
+        for (int i = 0; i < runCount; i++)
         {
-            errorCode = ResumeScript(vm, program);
+            int errorCode = RunScript(vm, program);
+            while (errorCode == VM_YIELDED)
+            {
+                errorCode = ResumeScript(vm, program);
+            }
+
+            if (errorCode == VM_ERROR)
+            {
+                test->_failureMessage = "RunScript returned VM_ERROR.";
+                test->_failed = true;
+                break;
+            }
         }
     }
     else
@@ -131,6 +142,7 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     }
 
     auto elapsedTime = clock.now().time_since_epoch() - startTime;
+    elapsedTime /= runCount;
 
     delete[] program;
     ShutdownVirtualMachine(vm);

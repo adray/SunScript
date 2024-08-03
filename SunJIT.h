@@ -12,7 +12,7 @@ namespace SunScript
 
     void JIT_Setup(Jit* jit);
     void* JIT_Initialize();
-    void* JIT_Compile(void* instance, VirtualMachine* vm, unsigned char* program, const FunctionInfo& info, const std::string& signature);
+    void* JIT_Compile(void* instance, VirtualMachine* vm, unsigned char* program, FunctionInfo* info, const std::string& signature);
     int JIT_Execute(void* instance, void* data);
     int JIT_Resume(void* instance);
     void* JIT_SearchCache(void* instance, const std::string& key);
