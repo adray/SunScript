@@ -1,7 +1,7 @@
 #include "SunTest.h"
-#include "..\SunScript.h"
-#include "..\Sun.h"
-#include "..\SunJIT.h"
+#include "../SunScript.h"
+#include "../Sun.h"
+#include "../SunJIT.h"
 #include <string>
 #include <iostream>
 #include <sstream>

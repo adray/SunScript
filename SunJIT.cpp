@@ -1,6 +1,5 @@
 #include "SunJIT.h"
 #include "SunScript.h"
-#include <Windows.h>
 #include <vector>
 #include <string>
 #include <stack>
@@ -10,6 +9,13 @@
 #include <assert.h>
 #include <chrono>
 #include <algorithm>
+#include <cstring>
+
+#ifdef WIN32
+#include <Windows.h>
+#else
+//#include <linux.h>
+#endif
 
 using namespace SunScript;
 
@@ -883,12 +889,12 @@ static void ConsumeInstruction(unsigned char* ins, unsigned int& pc)
         }
         else if (type == TY_STRING)
         {
-            pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+            pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         }
         break;
     case OP_CALL:
         pc += 5; // ins (byte) + numArgs (int)
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_CMP:
         pc++;
@@ -902,18 +908,18 @@ static void ConsumeInstruction(unsigned char* ins, unsigned int& pc)
         break;
     case OP_LOCAL:
         pc++;
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_POP:
         pc++;
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_POP_DISCARD:
         pc++;
         break;
     case OP_PUSH_LOCAL:
         pc++;
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_RETURN:
         pc++;
@@ -923,7 +929,7 @@ static void ConsumeInstruction(unsigned char* ins, unsigned int& pc)
         break;
     case OP_YIELD:
         pc += 2; // ins (byte) + numArgs (int)
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_DONE:
         pc++;
@@ -976,12 +982,12 @@ JIT_FlowGraph::JIT_FlowGraph()
         }
         else if (type == TY_STRING)
         {
-            pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+            pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         }
         break;
     case OP_CALL:
         pc += 5; // ins (byte) + numArgs (int)
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_CMP:
         pc++;
@@ -995,18 +1001,18 @@ JIT_FlowGraph::JIT_FlowGraph()
         break;
     case OP_LOCAL:
         pc++;
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_POP:
         pc++;
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_POP_DISCARD:
         pc++;
         break;
     case OP_PUSH_LOCAL:
         pc++;
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_RETURN:
         pc++;
@@ -1016,7 +1022,7 @@ JIT_FlowGraph::JIT_FlowGraph()
         break;
     case OP_YIELD:
         pc += 2; // ins (byte) + numArgs (int)
-        pc += unsigned int(strlen((char*)&ins[pc])) + 1;
+        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_DONE:
         pc++;
@@ -1457,7 +1463,7 @@ public:
 };
 
 //===================================
-
+#ifdef WIN32
 void* vm_allocate(int size)
 {
     return VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -1499,6 +1505,32 @@ void vm_commit_patch(void* data, int size)
         FlushInstructionCache(0, data, size);
     }
 }
+#else
+
+void* vm_allocate(int size)
+{
+    return nullptr;
+}
+
+void vm_initialize(void* data, unsigned char* jit, int size)
+{
+    
+}
+
+void vm_free(void* data, int size)
+{
+    
+}
+
+void vm_begin_patch(void* data, int size)
+{
+}
+
+void vm_commit_patch(void* data, int size)
+{
+
+}
+#endif
 
 extern "C"
 {
@@ -1795,7 +1827,7 @@ static void vm_jit_push(Jitter* jitter)
     case TY_STRING:
         {
             const char* str = (char*)&jitter->program[*jitter->pc];
-            (*jitter->pc) += unsigned int(strlen(str)) + 1;
+            (*jitter->pc) += static_cast<unsigned int>(strlen(str)) + 1;
             
             const int reg = jitter->allocator.Allocate();
             if (reg != -1)
@@ -2007,15 +2039,15 @@ static void vm_jit_add(Jitter* jitter)
         }
         else if (i1.type == TY_STRING && i2.type == TY_INT)
         {
-            vm_jit_call_internal_x64(jitter, 2, vm_append_string_int, TY_STRING);
+            vm_jit_call_internal_x64(jitter, 2, reinterpret_cast<void*>(vm_append_string_int), TY_STRING);
         }
         else if (i1.type == TY_INT && i2.type == TY_STRING)
         {
-            vm_jit_call_internal_x64(jitter, 2, vm_append_int_string, TY_STRING);
+            vm_jit_call_internal_x64(jitter, 2, reinterpret_cast<void*>(vm_append_int_string), TY_STRING);
         }
         else if (i1.type == TY_STRING && i2.type == TY_STRING)
         {
-            vm_jit_call_internal_x64(jitter, 2, vm_append_string_string, TY_STRING);
+            vm_jit_call_internal_x64(jitter, 2, reinterpret_cast<void*>(vm_append_string_string), TY_STRING);
         }
         else
         {
@@ -2571,7 +2603,7 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
     (*jitter->pc)++;
 
     char* name = (char*) & jitter->program[*jitter->pc];
-    (*jitter->pc) += unsigned int(strlen(name)) + 1;
+    (*jitter->pc) += static_cast<unsigned int>(strlen(name)) + 1;
 
     vm_jit_call_x64(vm, jitter, numParams, name);
 }
@@ -2581,7 +2613,7 @@ static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
     const int numParams = jitter->program[*jitter->pc];
     (*jitter->pc)++;
     char* name = (char*)&jitter->program[*jitter->pc];
-    (*jitter->pc) += unsigned int(strlen(name)) + 1;
+    (*jitter->pc) += static_cast<unsigned int>(strlen(name)) + 1;
 
     // First we do call_x64
     vm_jit_call_x64(vm, jitter, numParams, name);
@@ -2985,7 +3017,7 @@ static bool CanJITFunction(VirtualMachine* vm, unsigned int& pc, unsigned char* 
 {
     pc += 5;
     char* str = reinterpret_cast<char*>(&program[pc]);
-    pc += unsigned int(strlen(str)) + 1;
+    pc += static_cast<unsigned int>(strlen(str)) + 1;
 
     FunctionInfo* func;
     const int status = FindFunction(vm, str, &func);

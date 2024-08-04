@@ -5,10 +5,12 @@
 #include <unordered_map>
 #include <sstream>
 #include <iostream>
+#include <cstring>
 
 using namespace SunScript;
 
 #define VM_ALIGN_16(x) ((x + 0xf) & ~(0xf))
+#define VM_FLAGS_YIELD_JIT 0x1
 
 namespace SunScript
 {
@@ -23,8 +25,8 @@ namespace SunScript
         const uint64_t totalSize = VM_ALIGN_16(size + sizeof(Header));
         if (_memory == nullptr)
         {
-            // Allocate 4KB to start with
-            _totalSize = 4 * 1024;
+            // Allocate 8KB to start with
+            _totalSize = 8 * 1024;
             _memory = new unsigned char[_totalSize];
             std::memset(_memory, 0, _totalSize);
         }
@@ -38,7 +40,7 @@ namespace SunScript
         header->_refCount = 1ULL;
         header->_size = totalSize;
         header->_type = type;
-        _pos += 8;
+        _pos += sizeof(Header);
         unsigned char* mem = _memory + _pos;
         _pos += totalSize;
         return mem;
@@ -133,6 +135,7 @@ namespace SunScript
         int statusCode;
         int errorCode;
         int resumeCode;
+	int flags;
         std::int64_t timeout;
         std::chrono::steady_clock::time_point startTime;
         std::chrono::steady_clock clock;
@@ -586,7 +589,7 @@ static void Op_Call(VirtualMachine* vm)
             {
                 // Calls out to a handler
                 // parameters can be accessed via GetParamInt() etc
-                vm->statusCode = vm->handler(vm);
+		vm->statusCode = vm->handler(vm);
                 vm->running = vm->statusCode == VM_OK;
             }
             else
@@ -1094,6 +1097,7 @@ static void ResetVM(VirtualMachine* vm)
     vm->programOffset = 0;
     vm->stackBounds = 0;
     vm->errorCode = 0;
+    vm->flags = 0;
     vm->instructionsExecuted = 0;
     vm->timeout = 0;
     vm->callNumArgs = 0;
@@ -1311,6 +1315,10 @@ static int RunJIT(VirtualMachine* vm)
             vm->running = false;
             vm->statusCode = VM_ERROR;
         }
+	else if (status == VM_YIELDED)
+	{
+	    vm->flags = VM_FLAGS_YIELD_JIT;
+	}
         return status;
     }
 
@@ -1350,9 +1358,18 @@ int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned ch
 
 int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
 {
-    if (vm->jit_instance)
+    if (vm->jit_instance && ((vm->flags & VM_FLAGS_YIELD_JIT) == VM_FLAGS_YIELD_JIT))
     {
-        return vm->jit.jit_resume(vm->jit_instance);
+	const int status = vm->jit.jit_resume(vm->jit_instance);
+	if (status == VM_YIELDED)
+	{
+	    vm->flags = VM_FLAGS_YIELD_JIT; 
+	}
+	else
+	{
+	    vm->flags = 0;
+	}
+	return status;
     }
 
     return ResumeScript2(vm, program);
@@ -1388,6 +1405,8 @@ int SunScript::GetCallName(VirtualMachine* vm, std::string* name)
 
 int SunScript::GetParamInt(VirtualMachine* vm, int* param)
 {
+    if (vm->stack.size() == 0) { return VM_ERROR; }
+    
     void* val = vm->stack.top();
     if (vm->mm.GetType(val) == TY_INT)
     {
@@ -1404,6 +1423,8 @@ int SunScript::GetParamInt(VirtualMachine* vm, int* param)
 
 int SunScript::GetParamString(VirtualMachine* vm, std::string* param)
 {
+    if (vm->stack.size() == 0) { return VM_ERROR; }
+
     void* val = vm->stack.top();
     if (vm->mm.GetType(val) == TY_STRING)
     {

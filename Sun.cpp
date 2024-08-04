@@ -957,12 +957,12 @@ void Parser::EmitExpr(Expr* expr)
             if (call->Yield())
             {
                 EmitDebug(block, tok.Line());
-                EmitYield(block, tok.String(), unsigned char(args.size()));
+                EmitYield(block, tok.String(), static_cast<unsigned char>(args.size()));
             }
             else
             {
                 EmitDebug(block, tok.Line());
-                EmitCall(block, tok.String(), unsigned char(args.size()));
+                EmitCall(block, tok.String(), static_cast<unsigned char>(args.size()));
             }
             _emitCall = true;
         }
@@ -1901,7 +1901,7 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
 #ifdef _SUN_EXECUTABLE_
 #include <iostream>
 #include "SunScriptDemo.h"
-#include "Tests\SunTest.h"
+#include "Tests/SunTest.h"
     static void PrintHelp()
     {
         std::cout << "Usage:" << std::endl;
