@@ -4,8 +4,8 @@
 #include <vector>
 #include <iostream>
 #include <unordered_map>
-#include <sstream>
 #include <unordered_set>
+#include <sstream>
 #include <stack>
 #include <filesystem>
 
@@ -686,11 +686,17 @@ private:
         Label startLabel;
     };
 
+    struct Function
+    {
+        int id;
+        ProgramBlock* blk;
+    };
+
     struct StackFrame
     {
         bool _return;
         ProgramBlock* _block;
-        std::unordered_set<std::string> _vars;
+        std::unordered_map<std::string, int> _vars;
         std::stack<std::unordered_set<std::string>> _scope;
 
         StackFrame() : _return(false), _block(nullptr) {}
@@ -729,6 +735,7 @@ private:
     Expr* ParseCall();
     Call* ParseArgument();
     char Flip(char jump);
+    int GetOrCreateFunction(const std::string& name, ProgramBlock* blk);
 
     bool _scanning;
     int _pos;
@@ -739,6 +746,7 @@ private:
     Program* _program;
     bool _emitCall;
 
+    std::unordered_map<std::string, Function> _functions;
     std::stack<StackFrame> _frames;
     std::stack<Branch> _branches;
 };
@@ -759,6 +767,28 @@ Parser::Parser(const std::vector<Token>& tokens)
     _frames.push(StackFrame());
     _frames.top()._scope.push(std::unordered_set<std::string>());
     _frames.top()._block = CreateProgramBlock(true, "main", 0);
+
+    GetOrCreateFunction("main", _frames.top()._block);
+}
+
+int Parser::GetOrCreateFunction(const std::string& name, ProgramBlock* blk)
+{
+    int id = 0;
+    const auto& func = _functions.find(name);
+    if (func == _functions.end())
+    {
+        id = CreateFunction(_program);
+        _functions.insert(std::pair<std::string, Function>(name, Function{ .id = id, .blk = blk }));
+    }
+    else
+    {
+        id = func->second.id;
+        
+        // Update the block if it is set
+        if (blk) { func->second.blk = blk; }
+    }
+
+    return id;
 }
 
 char Parser::Flip(char jump)
@@ -883,8 +913,9 @@ void Parser::EmitExpr(Expr* expr)
         EmitExpr(expr->Left());
     }
 
-    ProgramBlock* block = _frames.top()._block;
-    bool binary = expr->Left() && expr->Right();
+    auto& frame = _frames.top();
+    ProgramBlock* block = frame._block;
+    const bool binary = expr->Left() && expr->Right();
 
     Token tok = expr->Op();
     switch (tok.Type())
@@ -932,12 +963,6 @@ void Parser::EmitExpr(Expr* expr)
     case TokenType::LESS_EQUALS:
         EmitCompare(block);
         break;
-    //case TokenType::OR:
-    //    EmitOr(block);
-    //    break;
-    //case TokenType::AND:
-    //    EmitAnd(block);
-    //    break;
     case TokenType::STRING:
         EmitPush(block, tok.String());
         break;
@@ -954,6 +979,8 @@ void Parser::EmitExpr(Expr* expr)
                 EmitExpr(args[i]);
             }
 
+            const int id = GetOrCreateFunction(tok.String(), nullptr);
+
             if (call->Yield())
             {
                 EmitDebug(block, tok.Line());
@@ -962,14 +989,22 @@ void Parser::EmitExpr(Expr* expr)
             else
             {
                 EmitDebug(block, tok.Line());
-                EmitCall(block, tok.String(), static_cast<unsigned char>(args.size()));
+                EmitCall(block, id, static_cast<unsigned char>(args.size()));
             }
             _emitCall = true;
         }
         else
         {
-            EmitDebug(block, tok.Line());
-            EmitPushLocal(block, tok.String());
+            const auto& it = frame._vars.find(tok.String());
+            if (it != frame._vars.end())
+            {
+                EmitDebug(block, tok.Line());
+                EmitPushLocal(block, it->second);
+            }
+            else
+            {
+                SetError("Use of undefined variable '" + tok.String() + "'.");
+            }
 
             // If we happened to just make a function call, clear the 
             // emit flag to indicate we have consumed the return value.
@@ -1119,6 +1154,7 @@ void Parser::ParseFunction()
         Advance();
 
         ProgramBlock* block = nullptr;
+        std::vector<std::string> params;
 
         if (Match(TokenType::IDENTIFIER))
         {
@@ -1129,16 +1165,16 @@ void Parser::ParseFunction()
             {
                 Advance();
 
-                std::vector<std::string> params;
                 ParseParameter(params);
-                
+
                 block = CreateProgramBlock(false, token.String(), int(params.size()));
 
+                const int id = GetOrCreateFunction(token.String(), block);
                 for (int i = 0; i < int(params.size()); i++)
                 {
                     auto& param = params[i];
                     EmitLocal(block, param);
-                    EmitPop(block, param);
+                    EmitPop(block, i);
                     EmitParameter(block, param);
                 }
             }
@@ -1162,8 +1198,15 @@ void Parser::ParseFunction()
                 {
                     Advance();
                     _frames.push(StackFrame());
-                    _frames.top()._scope.push(std::unordered_set<std::string>());
-                    _frames.top()._block = block;
+                    auto& top = _frames.top();
+                    top._scope.push(std::unordered_set<std::string>());
+                    top._block = block;
+
+                    for (int i = 0; i < params.size(); i++)
+                    {
+                        auto& param = params[i];
+                        top._vars.insert(std::pair<std::string, int>(param, i));
+                    }
                 }
                 else
                 {
@@ -1452,6 +1495,14 @@ void Parser::ParseAssignment()
 {
     Token identifier = Peek();
     Advance();
+    
+    const auto& it = _frames.top()._vars.find(identifier.String());
+
+    if (it == _frames.top()._vars.end())
+    {
+        SetError("Undefined variable '" + identifier.String() + "'");
+        return;
+    }
 
     if (Match(TokenType::EQUALS))
     {
@@ -1461,7 +1512,7 @@ void Parser::ParseAssignment()
         if (Match(TokenType::SEMICOLON))
         {
             EmitExpr(expr);
-            EmitPop(Block(), identifier.String());
+            EmitPop(Block(), it->second);
             FreeExpr(expr);
 
             Advance();
@@ -1477,9 +1528,9 @@ void Parser::ParseAssignment()
 
         if (Match(TokenType::SEMICOLON))
         {
-            EmitPushLocal(Block(), identifier.String());
+            EmitPushLocal(Block(), it->second);
             EmitIncrement(Block());
-            EmitPop(Block(), identifier.String());
+            EmitPop(Block(), it->second);
         }
         else
         {
@@ -1492,9 +1543,9 @@ void Parser::ParseAssignment()
 
         if (Match(TokenType::SEMICOLON))
         {
-            EmitPushLocal(Block(), identifier.String());
+            EmitPushLocal(Block(), it->second);
             EmitDecrement(Block());
-            EmitPop(Block(), identifier.String());
+            EmitPop(Block(), it->second);
         }
         else
         {
@@ -1511,7 +1562,7 @@ void Parser::ParseAssignment()
         if (Match(TokenType::SEMICOLON))
         {
             EmitExpr(expr);
-            EmitPushLocal(Block(), identifier.String());
+            EmitPushLocal(Block(), it->second);
             if (token.Type() == TokenType::MINUS_EQUALS)
             {
                 EmitSub(Block());
@@ -1528,7 +1579,7 @@ void Parser::ParseAssignment()
             {
                 EmitDiv(Block());
             }
-            EmitPop(Block(), identifier.String());
+            EmitPop(Block(), it->second);
             FreeExpr(expr);
 
             Advance();
@@ -1562,13 +1613,15 @@ void Parser::ParseVar()
 
                 if (Match(TokenType::SEMICOLON))
                 {
+                    const int var = int(top._vars.size());
+
                     EmitExpr(expr);
                     EmitLocal(Block(), identifier.String());
-                    EmitPop(Block(), identifier.String());
+                    EmitPop(Block(), var);
                     FreeExpr(expr);
 
                     StackFrame& frame = _frames.top();
-                    frame._vars.insert(identifier.String());
+                    frame._vars.insert(std::pair<std::string, int>(identifier.String(), var));
                     frame._scope.top().insert(identifier.String());
 
                     Advance();
@@ -1775,7 +1828,6 @@ void Parser::Parse()
                 }
 
                 EmitProgramBlock(_program, Block());
-                ReleaseProgramBlock(Block());
                 _frames.pop();
             }
             else
@@ -1807,9 +1859,28 @@ void Parser::Parse()
     {
         EmitDone(Block());
         EmitProgramBlock(_program, Block());
+
+        for (auto& func : _functions)
+        {
+            if (func.second.blk)
+            {
+                EmitInternalFunction(_program, func.second.blk, func.second.id);
+            }
+            else
+            {
+                EmitExternalFunction(_program, func.second.id, func.first);
+            }
+        }
+        FlushBlocks(_program);
     }
-    
-    ReleaseProgramBlock(Block());
+
+    for (auto& func : _functions)
+    {
+        if (func.second.blk)
+        {
+            ReleaseProgramBlock(func.second.blk);
+        }
+    }
 }
 
 //====================

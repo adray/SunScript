@@ -25,7 +25,6 @@ namespace SunScript
     constexpr unsigned char OP_FORMAT = 0x22;
     constexpr unsigned char OP_JUMP = 0x23;
     constexpr unsigned char OP_CMP = 0x24;
-
     constexpr unsigned char OP_RETURN = 0x25;
     constexpr unsigned char OP_POP_DISCARD = 0x26;
 
@@ -226,11 +225,19 @@ namespace SunScript
 
     void InvokeHandler(VirtualMachine* vm, const std::string& callName, int numParams);
 
-    int FindFunction(VirtualMachine* vm, const std::string& callName, FunctionInfo** info);
+    int FindFunction(VirtualMachine* vm, int id, FunctionInfo** info);
 
     unsigned char* GetLoadedProgram(VirtualMachine* vm);
 
     Program* CreateProgram();
+
+    void FlushBlocks(Program* program);
+
+    int CreateFunction(Program* program);
+
+    void EmitInternalFunction(Program* program, ProgramBlock* blk, int func);
+
+    void EmitExternalFunction(Program* program, int func, const std::string& name);
 
     ProgramBlock* CreateProgramBlock(bool topLevel, const std::string& name, int numArgs);
 
@@ -254,23 +261,23 @@ namespace SunScript
 
     void EmitLocal(ProgramBlock* program, const std::string& name);
     
-    void EmitSet(ProgramBlock* program, const std::string& name, int value);
+    void EmitSet(ProgramBlock* program, const unsigned char local, int value);
 
-    void EmitSet(ProgramBlock* program, const std::string& name, const std::string& value);
+    void EmitSet(ProgramBlock* program, const unsigned char local, const std::string& value);
     
-    void EmitPushLocal(ProgramBlock* program, const std::string& localName);
+    void EmitPushLocal(ProgramBlock* program, unsigned char local);
     
     void EmitPush(ProgramBlock* program, int value);
 
     void EmitPush(ProgramBlock* program, const std::string& value);
 
-    void EmitPop(ProgramBlock* program, const std::string& localName);
+    void EmitPop(ProgramBlock* program, unsigned char local);
 
     void EmitPop(ProgramBlock* program);
 
     void EmitYield(ProgramBlock* program, const std::string& name, unsigned char numArgs);
 
-    void EmitCall(ProgramBlock* program, const std::string& name, unsigned char numArgs);
+    void EmitCall(ProgramBlock* program, int func, unsigned char numArgs);
 
     void EmitAdd(ProgramBlock* program);
 

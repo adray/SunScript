@@ -893,8 +893,8 @@ static void ConsumeInstruction(unsigned char* ins, unsigned int& pc)
         }
         break;
     case OP_CALL:
-        pc += 5; // ins (byte) + numArgs (int)
-        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
+        pc += 9; // ins (byte) + numArgs (int) + id (int)
+        //pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
         break;
     case OP_CMP:
         pc++;
@@ -960,75 +960,6 @@ JIT_FlowGraph::JIT_FlowGraph()
     _tail(nullptr)
 {
 }
-
-/*void JIT_FlowGraph::ConsumeInstruction(unsigned char* ins, unsigned int& pc)
-{
-    char type;
-
-    switch (ins[pc])
-    {
-    case OP_ADD:
-    case OP_SUB:
-    case OP_MUL:
-    case OP_DIV:
-        pc++;
-        break;
-    case OP_PUSH:
-        pc++;
-        type = ins[pc];
-        if (type == TY_INT)
-        {
-            pc += 4;
-        }
-        else if (type == TY_STRING)
-        {
-            pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
-        }
-        break;
-    case OP_CALL:
-        pc += 5; // ins (byte) + numArgs (int)
-        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
-        break;
-    case OP_CMP:
-        pc++;
-        break;
-    case OP_JUMP:
-        pc += 4;
-        break;
-    case OP_DECREMENT:
-    case OP_INCREMENT:
-        pc++;
-        break;
-    case OP_LOCAL:
-        pc++;
-        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
-        break;
-    case OP_POP:
-        pc++;
-        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
-        break;
-    case OP_POP_DISCARD:
-        pc++;
-        break;
-    case OP_PUSH_LOCAL:
-        pc++;
-        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
-        break;
-    case OP_RETURN:
-        pc++;
-        break;
-    case OP_UNARY_MINUS:
-        pc++;
-        break;
-    case OP_YIELD:
-        pc += 2; // ins (byte) + numArgs (int)
-        pc += static_cast<unsigned int>(strlen((char*)&ins[pc])) + 1;
-        break;
-    case OP_DONE:
-        pc++;
-        break;
-    }
-}*/
 
 void JIT_FlowGraph::ScanJumps(unsigned char* ins, unsigned int pc, unsigned int size)
 {
@@ -1353,7 +1284,7 @@ struct JIT_Method
 
     std::string _cacheKey;
     std::string _signature;
-    std::string _name;
+    int _id;
 
     std::vector<JIT_SunStub> _stubs;
     std::vector<JIT_Jump> _forwardJumps;
@@ -1416,12 +1347,46 @@ public:
     long long _stackSize;
 };
 
+class JIT_TraceData
+{
+public:
+    unsigned char _pc;
+    std::vector<unsigned char> _trace;
+    void* _jit_data;
+
+    JIT_TraceData();
+};
+
+JIT_TraceData::JIT_TraceData()
+    :
+    _pc(0),
+    _jit_data(nullptr)
+{
+}
+
+class JIT_TraceCache
+{
+public:
+
+    JIT_TraceCache();
+
+    JIT_TraceData _cache[8];
+    int _cacheCount;
+};
+
+JIT_TraceCache::JIT_TraceCache() :
+    _cacheCount(0)
+{
+    std::memset(_cache, 0, sizeof(_cache));
+}
+
 class JIT_Manager
 {
 public:
     MemoryManager _mm;
     JIT_Cache _cache;
     JIT_Coroutine _co;
+    JIT_TraceCache _traceCache;
 };
 
 class Jitter
@@ -1433,7 +1398,7 @@ public:
     unsigned int* pc;
     RegisterAllocator allocator;
     VirtualStack stack;
-    std::unordered_map<std::string, Local> locals;
+    std::vector<Local> locals;
     JIT_Method* _method;
     JIT_Manager* _manager;
     JIT_FlowGraph fg;
@@ -1613,7 +1578,7 @@ extern "C"
         if (!data)
         {
             FunctionInfo* info;
-            if (VM_OK == FindFunction(vm, stub->_name, &info))
+            if (VM_OK == FindFunction(vm, stub->_id, &info))
             {
                 data = JIT_Compile(mm, vm, GetLoadedProgram(vm), info, stub->_signature);
                 cache = true;
@@ -1748,24 +1713,13 @@ static int vm_jit_read_int(unsigned char* program, unsigned int* pc)
     return a | (b << 8) | (c << 16) | (d << 24);
 }
 
-static void vm_jit_local(Jitter* jitter)
-{
-    const std::string name = vm_jit_read_string(jitter->program, jitter->pc);
-
-    const int pos = jitter->stack.Local();
-    //vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, 8); // grow stack
-
-    Local local = { .type = TY_VOID, .pos = pos };
-
-    jitter->locals.insert(std::pair<std::string, Local>(name, local));
-}
-
 static void vm_jit_pop(Jitter* jitter)
 {
-    const std::string name = vm_jit_read_string(jitter->program, jitter->pc);
+    const int id = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
 
     StackItem it = jitter->stack.Pop();
-    Local& local = jitter->locals[name];
+    Local& local = jitter->locals[id];
     if (it.store == ST_STACK)
     {
         if (it.pos != local.pos)
@@ -1789,12 +1743,13 @@ static void vm_jit_pop(Jitter* jitter)
 
 static void vm_jit_push_local(Jitter* jitter)
 {
-    const std::string name = vm_jit_read_string(jitter->program, jitter->pc);
+    const int id = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
 
-    const auto& it = jitter->locals.find(name);
-    if (it != jitter->locals.end())
+    if (jitter->locals.size() > id)
     {
-        jitter->stack.Push_Local(it->second.pos, it->second.type);
+        auto& local = jitter->locals[id];
+        jitter->stack.Push_Local(local.pos, local.type);
     }
     else
     {
@@ -2310,7 +2265,7 @@ static void vm_jit_neg(Jitter* jitter)
     }
 }
 
-static void* vm_jit_sun_stub(VirtualMachine* vm, Jitter* jitter, JIT_Method* method, int numParams, char* name, const std::string& signature)
+static void* vm_jit_sun_stub(VirtualMachine* vm, Jitter* jitter, JIT_Method* method, int numParams, const char* name, const std::string& signature)
 {
     auto& stub = method->_stubs.emplace_back();
 
@@ -2401,7 +2356,7 @@ static void vm_jit_call_push_stub(VirtualStack& stack, VirtualMachine* vm, unsig
     vm_call_absolute(jit, count, VM_REGISTER_EBX);
 }
 
-static void* vm_jit_cpp_interop(VirtualMachine* vm, Jitter* jitter, int numParams, char* name)
+static void* vm_jit_cpp_interop(VirtualMachine* vm, Jitter* jitter, int numParams, const char* name)
 {
     unsigned char jit[512];
     int count = 0;
@@ -2478,14 +2433,14 @@ static std::string vm_generate_function_signature(Jitter* jitter, int numParams)
     return signature.str();
 }
 
-static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, char* name)
+static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, int id)
 {
     // Look up if the function is in the cache. Call that directly.
     // Otherwise we need to compile the function:
 
     std::string signature = vm_generate_function_signature(jitter, numParams);
     std::stringstream key;
-    key << name << "_" << signature;
+    key << id << "_" << signature;
 
     bool shouldPatch = false;
     JIT_Method* method = reinterpret_cast<JIT_Method*>(jitter->_manager->_cache.SearchJITCache(key.str()));
@@ -2495,7 +2450,7 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
     {
         method = new JIT_Method();
         method->_endTime = 0;
-        method->_name = name;
+        method->_id = id;
         method->_runCount = 0;
         method->_signature = signature;
         method->_startTime = 0;
@@ -2504,10 +2459,10 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
         method->_jumpPos = 0;
 
         FunctionInfo* info;
-        if (FindFunction(vm, name, &info) == VM_OK)
+        if (FindFunction(vm, id, &info) == VM_OK)
         {
             // Generate a unique stub method for this method.
-            method->_jit_data = vm_jit_sun_stub(vm, jitter, method, numParams, name, signature);
+            method->_jit_data = vm_jit_sun_stub(vm, jitter, method, numParams, info->name.c_str(), signature);
             jitter->_manager->_cache.CacheJIT(jitter->_method->_cacheKey + "_" + key.str(), method);
             shouldPatch = true;
 
@@ -2516,7 +2471,7 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
         }
         else
         {
-            method->_jit_data = vm_jit_cpp_interop(vm, jitter, numParams, name);
+            method->_jit_data = vm_jit_cpp_interop(vm, jitter, numParams, info->name.c_str());
             jitter->_manager->_cache.CacheJIT(key.str(), method);
         }
     }
@@ -2602,10 +2557,9 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
     const int numParams = jitter->program[*jitter->pc];
     (*jitter->pc)++;
 
-    char* name = (char*) & jitter->program[*jitter->pc];
-    (*jitter->pc) += static_cast<unsigned int>(strlen(name)) + 1;
+    const int id = vm_jit_read_int(jitter->program, jitter->pc);
 
-    vm_jit_call_x64(vm, jitter, numParams, name);
+    vm_jit_call_x64(vm, jitter, numParams, id);
 }
 
 static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
@@ -2615,8 +2569,9 @@ static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
     char* name = (char*)&jitter->program[*jitter->pc];
     (*jitter->pc) += static_cast<unsigned int>(strlen(name)) + 1;
 
+    abort();
     // First we do call_x64
-    vm_jit_call_x64(vm, jitter, numParams, name);
+    //vm_jit_call_x64(vm, jitter, numParams, name);
 
     // Then we make a call to 'vm_yield'.
     // Which will record the stack pointer and the instruction pointer.
@@ -2727,9 +2682,6 @@ static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock
 
         switch (ins)
         {
-        case OP_LOCAL:
-            vm_jit_local(jitter);
-            break;
         case OP_POP:
             vm_jit_pop(jitter);
             break;
@@ -3016,11 +2968,12 @@ void vm_jit_entry_stub(JIT_Manager* manager)
 static bool CanJITFunction(VirtualMachine* vm, unsigned int& pc, unsigned char* program)
 {
     pc += 5;
-    char* str = reinterpret_cast<char*>(&program[pc]);
-    pc += static_cast<unsigned int>(strlen(str)) + 1;
+    const int id = vm_jit_read_int(program, &pc);
+    //char* str = reinterpret_cast<char*>(&program[pc]);
+    //pc += static_cast<unsigned int>(strlen(str)) + 1;
 
     FunctionInfo* func;
-    const int status = FindFunction(vm, str, &func);
+    const int status = FindFunction(vm, id, &func);
 
     if (status == VM_OK)
     {
@@ -3097,11 +3050,12 @@ void* SunScript::JIT_Compile(void* instance, VirtualMachine* vm, unsigned char* 
     jitter->pc = &pc;
     jitter->jit = jit;
     jitter->info = info;
+    jitter->locals.reserve(info->locals.size() + info->parameters.size());
     jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
     jitter->fg.Init(program, pc, info->size);
 
     jitter->_method = new JIT_Method();
-    jitter->_method->_name = info->name;
+    jitter->_method->_id = 0;// info->;
     jitter->_method->_signature = signature;
     jitter->_method->_runCount = 0;
     jitter->_method->_cacheKey = info->name + "_" + signature;
@@ -3182,7 +3136,7 @@ static std::string JIT_Method_Stats(JIT_Method* method)
     }
 
     std::stringstream ss;
-    ss << "Name: " << method->_name << std::endl;
+    ss << "Name: " << method->_id << std::endl;
     ss << "Signature: (" << method->_signature << ")" << std::endl;
     ss << "Cache Key: " << method->_cacheKey << std::endl;
     ss << "Patches Applied: " << numPatchesApplied << "/" << method->_stubs.size() << std::endl;
@@ -3219,6 +3173,75 @@ void SunScript::JIT_Shutdown(void* instance)
 {
     JIT_Manager* mm = reinterpret_cast<JIT_Manager*>(instance);
     delete mm;
+}
+
+//===========================
+// JIT tracing
+//===========================
+
+
+void* SunScript::JIT_CreateTrace(void* instance)
+{
+    JIT_Manager* mm = reinterpret_cast<JIT_Manager*>(instance);
+    return new JIT_TraceData();
+}
+
+void SunScript::JIT_Trace(void* trace, unsigned char* pc, unsigned int count)
+{
+    JIT_TraceData* traceData = reinterpret_cast<JIT_TraceData*>(trace);
+    for (unsigned int i = 0; i < count; i++)
+    {
+        traceData->_trace.push_back(*pc);
+        (*pc)++;
+    }
+}
+
+void SunScript::JIT_FinalizeTrace(void* instance, VirtualMachine* vm, void* trace)
+{
+    JIT_TraceData* traceData = reinterpret_cast<JIT_TraceData*>(trace);
+
+    unsigned char jit[1024];
+    unsigned int pc = 0;// info->pc;
+
+    std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
+    jitter->program = traceData->_trace.data();
+    jitter->pc = &pc;
+    jitter->jit = jit;
+    jitter->info = nullptr; //info;
+    //jitter->locals.reserve(info->locals.size() + info->parameters.size());
+    jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
+    jitter->fg.Init(jitter->program, pc, static_cast<unsigned int>(traceData->_trace.size()));
+
+    jitter->_method = new JIT_Method();
+    jitter->_method->_id = 0; //info->name;
+    jitter->_method->_signature = ""; //signature;
+    jitter->_method->_runCount = 0;
+    jitter->_method->_cacheKey = "";// info->name + "_" + signature;
+    jitter->_method->_jumpPos = 0;
+
+    std::chrono::steady_clock clock;
+
+    //==============================
+    // Run the JIT compilation
+    //==============================
+    jitter->_method->_startTime = clock.now().time_since_epoch().count();
+
+    vm_jit_generate(vm, jitter.get());
+    jitter->_method->_jit_data = vm_allocate(jitter->count);
+    vm_initialize(jitter->_method->_jit_data, jitter->jit, jitter->count);
+
+    for (auto& stub : jitter->_method->_stubs)
+    {
+        stub._patch._data = jitter->_method->_jit_data;
+        stub._patch._size = jitter->count;
+    }
+
+    jitter->_method->_size = jitter->count;
+
+    //===============================
+    jitter->_method->_endTime = clock.now().time_since_epoch().count();
+
+    //return jitter->_method;
 }
 
 //===========================

@@ -117,7 +117,7 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     std::chrono::steady_clock clock;
     auto startTime = clock.now().time_since_epoch();
 
-    const int runCount = 1000;
+    const int runCount = 10000;
     if (program)
     {
         for (int i = 0; i < runCount; i++)

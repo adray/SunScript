@@ -37,26 +37,32 @@ int Handler(VirtualMachine* vm)
 void SunScript::Demo1(int _42)
 {
     auto _program = CreateProgram();
+    int main = CreateFunction(_program);
+    int print = CreateFunction(_program);
     auto _block = CreateProgramBlock(true, "main", 0);
     SunScript::Label label;
 
     SunScript::EmitPush(_block, "Hello, from sunbeam.");
-    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitCall(_block, print, 1);
     SunScript::EmitPush(_block, 42);
     SunScript::EmitPush(_block, _42);
     SunScript::EmitCompare(_block);
     SunScript::EmitJump(_block, JUMP_NE, &label);
     SunScript::EmitPush(_block, "10 times 10 is:");
-    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitCall(_block, print, 1);
     SunScript::EmitPush(_block, 10);
     SunScript::EmitPush(_block, 10);
     SunScript::EmitMul(_block);
-    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitCall(_block, print, 1);
     SunScript::EmitLabel(_block, &label);
     SunScript::EmitPush(_block, "Bye, from sunbeam.");
-    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitCall(_block, print, 1);
     SunScript::EmitDone(_block);
     SunScript::EmitProgramBlock(_program, _block);
+
+    SunScript::EmitInternalFunction(_program, _block, main);
+    SunScript::EmitExternalFunction(_program, print, "Print");
+    SunScript::FlushBlocks(_program);
 
     unsigned char* programData;
     GetProgram(_program, &programData);
@@ -74,6 +80,8 @@ void SunScript::Demo1(int _42)
 void SunScript::Demo2()
 {
     auto _program = CreateProgram();
+    int main = CreateFunction(_program);
+    int print = CreateFunction(_program);
     auto _block = CreateProgramBlock(true, "main", 0);
 
     Label label;
@@ -87,10 +95,14 @@ void SunScript::Demo2()
     SunScript::EmitCompare(_block);
     SunScript::EmitJump(_block, JUMP_NE, &label);
     SunScript::EmitPush(_block, "11 == 11 && \"Hello\" == \"Hello\"");
-    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitCall(_block, print, 1);
     SunScript::EmitLabel(_block, &label);
     SunScript::EmitDone(_block);
     SunScript::EmitProgramBlock(_program, _block);
+
+    SunScript::EmitInternalFunction(_program, _block, main);
+    SunScript::EmitExternalFunction(_program, print, "Print");
+    SunScript::FlushBlocks(_program);
 
     unsigned char* programData;
     GetProgram(_program, &programData);
@@ -108,29 +120,37 @@ void SunScript::Demo2()
 void SunScript::Demo3()
 {
     auto _program = CreateProgram();
+    int main = CreateFunction(_program);
+    int print = CreateFunction(_program);
     auto _block = CreateProgramBlock(true, "main", 0);
 
     Label loopStart;
     Label loopEnd;
 
+    const int x = 0;
+
     SunScript::EmitLocal(_block, "x");
-    SunScript::EmitSet(_block, "x", 0);
+    SunScript::EmitSet(_block, x, 0);
     SunScript::MarkLabel(_block, &loopStart);
     SunScript::EmitPush(_block, 10);
-    SunScript::EmitPushLocal(_block, "x");
+    SunScript::EmitPushLocal(_block, x);
     SunScript::EmitCompare(_block);
     SunScript::EmitJump(_block, JUMP_GE, &loopEnd);
-    SunScript::EmitPushLocal(_block, "x");
+    SunScript::EmitPushLocal(_block, x);
     SunScript::EmitPush(_block, 1);
     SunScript::EmitAdd(_block);
-    SunScript::EmitPop(_block, "x");
-    SunScript::EmitPushLocal(_block, "x");
-    SunScript::EmitCall(_block, "Print", 1);
+    SunScript::EmitPop(_block, x);
+    SunScript::EmitPushLocal(_block, x);
+    SunScript::EmitCall(_block, print, 1);
     SunScript::EmitJump(_block, JUMP, &loopStart);
     SunScript::EmitLabel(_block, &loopEnd);
     SunScript::EmitDone(_block);
     SunScript::EmitMarkedLabel(_block, &loopStart);
     SunScript::EmitProgramBlock(_program, _block);
+
+    SunScript::EmitInternalFunction(_program, _block, main);
+    SunScript::EmitExternalFunction(_program, print, "Print");
+    SunScript::FlushBlocks(_program);
 
     unsigned char* programData;
     GetProgram(_program, &programData);

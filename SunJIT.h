@@ -20,4 +20,8 @@ namespace SunScript
     void JIT_Free(void* data);
     std::string JIT_Stats(void* data);
     void JIT_Shutdown(void* instance);
+
+    void* JIT_CreateTrace(void* instance);
+    void JIT_Trace(void* trace, unsigned char* pc, unsigned int count);
+    void JIT_FinalizeTrace(void* instance, VirtualMachine* vm, void* trace);
 }

@@ -6,6 +6,7 @@
 #include <sstream>
 #include <iostream>
 #include <cstring>
+#include <assert.h>
 
 using namespace SunScript;
 
@@ -108,22 +109,62 @@ namespace SunScript
 
 //============================
 
+    class Stack
+    {
+    public:
+        inline Stack();
+
+        inline void push(void* data);
+        inline void* pop();
+        inline size_t size() { return _pos; }
+        inline void* top() { return _array[_pos - 1]; }
+        inline bool empty() { return _pos == 0; }
+
+    private:
+        void** _array;
+        unsigned int _size;
+        unsigned int _pos;
+    };
+
+    Stack::Stack()
+        : _size(32), _pos(0)
+    {
+        _array = new void* [_size];
+    };
+
+    void Stack::push(void* data)
+    {
+        _array[_pos++] = data;
+    }
+
+    void* Stack::pop()
+    {
+        return _array[--_pos];
+    }
+
+//============================
+
     struct StackFrame
     {
         int debugLine;
         int returnAddress;
         int stackBounds;
+        int localBounds;
         FunctionInfo* func;
         std::string functionName;
-        std::stack<int> branches;
-        std::unordered_map<std::string, void*> locals;
-        std::stack<int> loops;
+    };
+
+    struct Block
+    {
+        int numArgs;
+        FunctionInfo info;
     };
 
     struct Function
     {
-        int numArgs;
-        FunctionInfo info;
+        int id;
+        int blk;
+        std::string name;
     };
 
     struct VirtualMachine
@@ -131,28 +172,29 @@ namespace SunScript
         unsigned char* program;
         unsigned int programCounter;
         unsigned int programOffset;
+        int* debugLines;
         bool running;
         int statusCode;
         int errorCode;
         int resumeCode;
-	int flags;
+        int flags;
         std::int64_t timeout;
         std::chrono::steady_clock::time_point startTime;
         std::chrono::steady_clock clock;
         int instructionsExecuted;
         int debugLine;
         int stackBounds;
+        int localBounds;
         int callNumArgs;
         int comparer;
         MemoryManager mm;
+        FunctionInfo* main;
         std::string callName;
-        std::stack<int> branches;
-        std::stack<int> loops;
         std::stack<StackFrame> frames;
-        std::stack<void*> stack;
-        std::unordered_map<int, int> debugLines;
-        std::unordered_map<std::string, Function> functions;
-        std::unordered_map<std::string, void*> locals;
+        Stack stack;
+        std::vector<Block> blocks;
+        std::vector<Function> functions;
+        std::vector<void*> locals;
         int (*handler)(VirtualMachine* vm);
         Jit jit;
         void* jit_instance;
@@ -161,11 +203,12 @@ namespace SunScript
 
     struct ProgramBlock
     {
-        std::string name;
+        bool topLevel;
         int numLines;
         int numArgs;
         int numLabels;
-        bool topLevel;
+        int id;
+        std::string name;
         std::vector<std::string> args;
         std::vector<std::string> fields;
         std::vector<unsigned char> debug;
@@ -177,6 +220,8 @@ namespace SunScript
         std::vector<unsigned char> debug;
         std::vector<unsigned char> data;
         std::vector<unsigned char> functions;
+        std::vector<unsigned char> entries;
+        std::vector<ProgramBlock*> blocks;
         int numFunctions;
         int numLines;
     };
@@ -256,7 +301,7 @@ Callstack* SunScript::GetCallStack(VirtualMachine* vm)
     {
         auto& frame = frames.top();
         tail->functionName = frame.functionName;
-        tail->numArgs = vm->functions[frame.functionName].numArgs;
+        tail->numArgs = int(frame.func->parameters.size());
         tail->debugLine = debugLine;
         tail->programCounter = pc;
         
@@ -291,6 +336,7 @@ VirtualMachine* SunScript::CreateVirtualMachine()
     vm->handler = nullptr;
     vm->_userData = nullptr;
     vm->program = nullptr;
+    vm->debugLines = nullptr;
     vm->comparer = 0;
     std::memset(&vm->jit, 0, sizeof(vm->jit));
     return vm;
@@ -388,46 +434,52 @@ static int Read_Int(unsigned char* program, unsigned int* pc)
     return a | (b << 8) | (c << 16) | (d << 24);
 }
 
-static std::string Read_String(unsigned char* program, unsigned int* pc)
+//static std::string Read_String(unsigned char* program, unsigned int* pc)
+//{
+//    std::string str;
+//    int index = 0;
+//    char ch = (char)program[*pc];
+//    (*pc)++;
+//    while (ch != 0)
+//    {
+//        str = str.append(1, ch);
+//        ch = (char)program[*pc];
+//        (*pc)++;
+//    }
+//    return str;
+//}
+
+static char* Read_String(unsigned char* program, unsigned int* pc)
 {
-    std::string str;
-    int index = 0;
-    char ch = (char)program[*pc];
-    (*pc)++;
-    while (ch != 0)
-    {
-        str = str.append(1, ch);
-        ch = (char)program[*pc];
-        (*pc)++;
-    }
+    char* str = (char*)&program[*pc];
+    const size_t len = strlen(str) + 1;
+    *pc += unsigned int(len);
     return str;
 }
 
 static void Push_Int(VirtualMachine* vm, int val)
 {
-    if (vm->statusCode == VM_OK)
-    {
-        int* data = reinterpret_cast<int*>(vm->mm.New(sizeof(int), TY_INT));
-        *data = val;
-        vm->stack.push(data);
-    }
+    assert(vm->statusCode == VM_OK);
+
+    int* data = reinterpret_cast<int*>(vm->mm.New(sizeof(int), TY_INT));
+    *data = val;
+    vm->stack.push(data);
 }
 
-static void Push_String(VirtualMachine* vm, const std::string& val)
+static void Push_String(VirtualMachine* vm, const char* str)
 {
-    if (vm->statusCode == VM_OK)
-    {
-        char* data = reinterpret_cast<char*>(vm->mm.New(sizeof(char*), TY_STRING));
-        std::memcpy(data, val.c_str(), val.size() + 1);
-        vm->stack.push(data);
-    }
+    assert(vm->statusCode == VM_OK);
+
+    char* data = reinterpret_cast<char*>(vm->mm.New(sizeof(char*), TY_STRING));
+    std::memcpy(data, str, strlen(str) + 1);
+    vm->stack.push(data);
 }
 
 static void Op_Set(VirtualMachine* vm)
 {
     unsigned char type = vm->program[vm->programCounter++];
-    const std::string name = Read_String(vm->program, &vm->programCounter);
-    auto& local = vm->locals[name];
+    const int id = Read_Byte(vm->program, &vm->programCounter) + vm->localBounds;
+    auto& local = vm->locals[id];
 
     switch (type)
     {
@@ -453,9 +505,9 @@ static void Op_Set(VirtualMachine* vm)
     {
         if (vm->statusCode == VM_OK)
         {
-            std::string str = Read_String(vm->program, &vm->programCounter);
+            char* str = Read_String(vm->program, &vm->programCounter);
             char* data = reinterpret_cast<char*>(vm->mm.New(sizeof(int), TY_INT));
-            std::memcpy(data, str.c_str(), str.size() + 1);
+            std::memcpy(data, str, strlen(str) + 1);
             vm->stack.push(data);
         }
         else if (vm->statusCode == VM_PAUSED)
@@ -473,14 +525,13 @@ static void Op_Set(VirtualMachine* vm)
 
 static void Op_Push_Local(VirtualMachine* vm)
 {
-    std::string name = Read_String(vm->program, &vm->programCounter);
+    const int id = Read_Byte(vm->program, &vm->programCounter) + vm->localBounds;
 
     if (vm->statusCode == VM_OK)
     {
-        const auto& it = vm->locals.find(name);
-        if (it != vm->locals.end())
+        if (vm->locals.size() > id)
         {
-            vm->stack.push(it->second);
+            vm->stack.push(vm->locals[id]);
         }
         else
         {
@@ -506,100 +557,96 @@ static void Op_Push(VirtualMachine* vm)
 
 static void Op_Return(VirtualMachine* vm)
 {
-    if (vm->statusCode == VM_OK)
+    assert(vm->statusCode == VM_OK);
+
+    if (vm->frames.size() == 0)
     {
-        if (vm->frames.size() == 0)
-        {
-            vm->statusCode = VM_ERROR;
-            vm->running = false;
-            return;
-        }
-
-        StackFrame& frame = vm->frames.top();
-
-        // Record stats
-        if (vm->stack.size() > 0)
-        {
-            void* retVal = vm->stack.top();
-            const char type = vm->mm.GetType(retVal);
-            RecordReturn(frame.func, vm->programCounter, type);
-        }
-        else
-        {
-            // TY_VOID
-            RecordReturn(frame.func, vm->programCounter, TY_VOID);
-        }
-
-        vm->locals = frame.locals;
-        vm->branches = frame.branches;
-        vm->loops = frame.loops;
-        vm->stackBounds = frame.stackBounds;
-        vm->frames.pop();
-        vm->programCounter = frame.returnAddress;
+        vm->statusCode = VM_ERROR;
+        vm->running = false;
+        return;
     }
+
+    StackFrame& frame = vm->frames.top();
+
+    // Record stats
+    if (vm->stack.size() > 0)
+    {
+        void* retVal = vm->stack.top();
+        const char type = vm->mm.GetType(retVal);
+        RecordReturn(frame.func, vm->programCounter, type);
+    }
+    else
+    {
+        // TY_VOID
+        RecordReturn(frame.func, vm->programCounter, TY_VOID);
+    }
+
+    vm->stackBounds = frame.stackBounds;
+    vm->localBounds = frame.localBounds;
+    vm->frames.pop();
+    vm->programCounter = frame.returnAddress;
 }
 
-static void CreateStackFrame(VirtualMachine* vm, StackFrame& frame, int numArguments)
+static void CreateStackFrame(VirtualMachine* vm, StackFrame& frame, int numArguments, int numLocals)
 {
     frame.returnAddress = vm->programCounter;
-    frame.locals = vm->locals;
-    frame.branches = vm->branches;
-    frame.loops = vm->loops;
+    frame.localBounds = vm->localBounds;
     frame.stackBounds = vm->stackBounds;
 
-    vm->locals.clear();
-    vm->loops = std::stack<int>();
-    vm->branches = std::stack<int>();
     vm->stackBounds = int(vm->stack.size()) - numArguments;
+    vm->localBounds = int(vm->locals.size());
+    vm->locals.resize(numArguments + numLocals + vm->locals.size());
 
     // TODO: we may need to reverse the stack?
 }
 
 static void Op_Call(VirtualMachine* vm)
 {
+    assert (vm->statusCode == VM_OK);
+    
     unsigned char numArgs = Read_Byte(vm->program, &vm->programCounter);
-    vm->callName = Read_String(vm->program, &vm->programCounter);
+    const int id = Read_Int(vm->program, &vm->programCounter);
+    auto& func = vm->functions[id];
+    vm->callName = func.name;
     vm->callNumArgs = numArgs;
-    if (vm->statusCode == VM_OK)
+    
+    if (func.blk != -1)
     {
-        const auto& it = vm->functions.find(vm->callName);
-        if (it != vm->functions.end())
+        auto& blk = vm->blocks[func.blk];
+        if (blk.numArgs == numArgs)
         {
-            if (it->second.numArgs == numArgs)
-            {
-                const int address = it->second.info.pc + vm->programOffset;
-                StackFrame& frame = vm->frames.emplace();
-                frame.functionName = vm->callName;
-                frame.debugLine = vm->debugLine;
-                frame.func = &it->second.info;
-                CreateStackFrame(vm, frame, numArgs);
-                vm->programCounter = address;
+            const int address = blk.info.pc + vm->programOffset;
+            StackFrame& frame = vm->frames.emplace();
+            frame.functionName = vm->callName;
+            frame.debugLine = vm->debugLine;
+            frame.func = &blk.info;
+            CreateStackFrame(vm, frame, numArgs, int(blk.info.locals.size()));
+            vm->programCounter = address;
 
-                it->second.info.counter++;
-            }
-            else
-            {
-                vm->running = false;
-                vm->statusCode = VM_ERROR;
-            }
+            blk.info.counter++;
         }
         else
         {
-            if (vm->handler)
-            {
-                // Calls out to a handler
-                // parameters can be accessed via GetParamInt() etc
-		vm->statusCode = vm->handler(vm);
-                vm->running = vm->statusCode == VM_OK;
-            }
-            else
-            {
-                // no handler defined
-                vm->running = false;
-                vm->statusCode = VM_ERROR;
-            }
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
         }
     }
+    else
+    {
+        if (vm->handler)
+        {
+            // Calls out to a handler
+            // parameters can be accessed via GetParamInt() etc
+            vm->statusCode = vm->handler(vm);
+            vm->running = vm->statusCode == VM_OK;
+        }
+        else
+        {
+            // no handler defined
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
+        }
+    }    
 }
 
 static void Op_Yield(VirtualMachine* vm)
@@ -635,7 +682,8 @@ static void Op_Yield(VirtualMachine* vm)
 
 static void Op_Pop_Discard(VirtualMachine* vm)
 {
-    if (vm->statusCode == VM_OK && vm->stack.size() > vm->stackBounds)
+    assert(vm->statusCode == VM_OK);
+    if (vm->stack.size() > vm->stackBounds)
     {
         if (vm->stack.size() == 0)
         {
@@ -651,30 +699,20 @@ static void Op_Pop_Discard(VirtualMachine* vm)
 
 static void Op_Pop(VirtualMachine* vm)
 {
-    const std::string name = Read_String(vm->program, &vm->programCounter);
+    assert(vm->statusCode == VM_OK);
 
-    if (vm->statusCode == VM_OK)
+    const int id = Read_Byte(vm->program, &vm->programCounter) + vm->localBounds;
+
+    if (!vm->stack.empty())
     {
-        if (!vm->stack.empty())
-        {
-            vm->locals[name] = vm->stack.top();
+        vm->locals[id] = vm->stack.top();
 
-            vm->stack.pop();
-        }
-        else
-        {
-            vm->running = false;
-            vm->statusCode = VM_ERROR;
-        }
+        vm->stack.pop();
     }
-}
-
-static void Op_Local(VirtualMachine* vm)
-{
-    const std::string name = Read_String(vm->program, &vm->programCounter);
-    if (vm->statusCode == VM_OK)
+    else
     {
-        vm->locals.insert(std::pair<std::string, void*>(name, nullptr));
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
     }
 }
 
@@ -699,7 +737,7 @@ static void Add_String(VirtualMachine* vm, char* v1, void* v2)
 
     if (vm->statusCode == VM_OK)
     {
-        Push_String(vm, result.str());
+        Push_String(vm, result.str().c_str());
     }
 }
 
@@ -817,10 +855,7 @@ static void Op_Unary_Minus(VirtualMachine* vm)
 
 static void Op_Operator(unsigned char op, VirtualMachine* vm)
 {
-    if (vm->statusCode != VM_OK)
-    {
-        return;
-    }
+    assert(vm->statusCode == VM_OK);
 
     if (vm->stack.size() < 2)
     {
@@ -891,101 +926,99 @@ static void Op_Operator(unsigned char op, VirtualMachine* vm)
     }
 }
 
-static void Op_Format(VirtualMachine* vm)
-{
-    if (vm->statusCode == VM_OK)
-    {
-        void* formatVal = vm->stack.top();
-        if (vm->mm.GetType(formatVal) != TY_STRING)
-        {
-            vm->statusCode = VM_ERROR;
-            vm->running = false;
-            return;
-        }
-
-        const std::string format = std::string(reinterpret_cast<char*>(formatVal));
-        vm->stack.pop();
-
-        std::stringstream formatted;
-
-        size_t offset = 0;
-        while (offset < format.size())
-        {
-            size_t pos = format.find('{', offset);
-            formatted << format.substr(offset, pos - offset);
-            if (pos == std::string::npos) { break; }
-            size_t end = format.find('}', pos);
-
-            std::string name = format.substr(pos + 1, end - pos - 1);
-            void* local = vm->locals[name];
-            switch (vm->mm.GetType(local))
-            {
-            case TY_INT:
-                formatted << *reinterpret_cast<int*>(local);
-                break;
-            case TY_STRING:
-                formatted << reinterpret_cast<char*>(local);
-                break;
-            default:
-                vm->statusCode = VM_ERROR;
-                vm->running = false;
-                break;
-            }
-
-            offset = end + 1;
-        }
-
-        Push_String(vm, formatted.str());
-    }
-}
+//static void Op_Format(VirtualMachine* vm)
+//{
+//    if (vm->statusCode == VM_OK)
+//    {
+//        void* formatVal = vm->stack.top();
+//        if (vm->mm.GetType(formatVal) != TY_STRING)
+//        {
+//            vm->statusCode = VM_ERROR;
+//            vm->running = false;
+//            return;
+//        }
+//
+//        const std::string format = std::string(reinterpret_cast<char*>(formatVal));
+//        vm->stack.pop();
+//
+//        std::stringstream formatted;
+//
+//        size_t offset = 0;
+//        while (offset < format.size())
+//        {
+//            size_t pos = format.find('{', offset);
+//            formatted << format.substr(offset, pos - offset);
+//            if (pos == std::string::npos) { break; }
+//            size_t end = format.find('}', pos);
+//
+//            std::string name = format.substr(pos + 1, end - pos - 1);
+//            void* local = //vm->locals[name];
+//            switch (vm->mm.GetType(local))
+//            {
+//            case TY_INT:
+//                formatted << *reinterpret_cast<int*>(local);
+//                break;
+//            case TY_STRING:
+//                formatted << reinterpret_cast<char*>(local);
+//                break;
+//            default:
+//                vm->statusCode = VM_ERROR;
+//                vm->running = false;
+//                break;
+//            }
+//
+//            offset = end + 1;
+//        }
+//
+//        Push_String(vm, formatted.str());
+//    }
+//}
 
 static void Op_Increment(VirtualMachine* vm)
 {
-    if (vm->statusCode == VM_OK)
+    assert(vm->statusCode == VM_OK);
+    
+    if (vm->stack.size() == 0)
     {
-        if (vm->stack.size() == 0)
-        {
-            vm->running = false;
-            vm->statusCode = VM_ERROR;
-            return;
-        }
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
 
-        void* value = vm->stack.top();
+    void* value = vm->stack.top();
         
-        if (vm->mm.GetType(value) == TY_INT)
-        {
-            (*reinterpret_cast<int*>(value))++;
-        }
-        else
-        {
-            vm->running = false;
-            vm->statusCode = VM_ERROR;
-        }
+    if (vm->mm.GetType(value) == TY_INT)
+    {
+        (*reinterpret_cast<int*>(value))++;
+    }
+    else
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
     }
 }
 
 static void Op_Decrement(VirtualMachine* vm)
 {
-    if (vm->statusCode == VM_OK)
+    assert(vm->statusCode == VM_OK);
+    
+    if (vm->stack.size() == 0)
     {
-        if (vm->stack.size() == 0)
-        {
-            vm->running = false;
-            vm->statusCode = VM_ERROR;
-            return;
-        }
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
 
-        void* value = vm->stack.top();
+    void* value = vm->stack.top();
 
-        if (vm->mm.GetType(value) == TY_INT)
-        {
-            (*reinterpret_cast<int*>(value))--;
-        }
-        else
-        {
-            vm->running = false;
-            vm->statusCode = VM_ERROR;
-        }
+    if (vm->mm.GetType(value) == TY_INT)
+    {
+        (*reinterpret_cast<int*>(value))--;
+    }
+    else
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
     }
 }
 
@@ -1054,8 +1087,7 @@ static void Op_Jump(VirtualMachine* vm)
     }
     else
     {
-        auto& main = vm->functions["main"]; // cache main?
-        RecordBranch(&main.info, pc, branchDir);
+        RecordBranch(vm->main, pc, branchDir);
     }
 }
 
@@ -1105,30 +1137,27 @@ static void ResetVM(VirtualMachine* vm)
     while (!vm->stack.empty()) { vm->stack.pop(); }
     while (!vm->frames.empty()) { vm->frames.pop(); }
     vm->locals.clear();
-    vm->debugLines.clear();
     vm->functions.clear();
-    while (!vm->branches.empty()) {
-        vm->branches.pop();
-    }
-    while (!vm->loops.empty()) {
-        vm->loops.pop();
-    }
+    vm->blocks.clear();
+    delete[] vm->debugLines;
 }
 
 static void ScanFunctions(VirtualMachine* vm, unsigned char* program)
 {
-    const int numFunctions = Read_Int(program, &vm->programCounter);
-    for (int i = 0; i < numFunctions; i++)
+    const int numBlocks = Read_Int(program, &vm->programCounter);
+    const int numEntries = Read_Int(program, &vm->programCounter);
+    for (int i = 0; i < numBlocks; i++)
     {
         const int functionOffset = Read_Int(program, &vm->programCounter);
         const int functionSize = Read_Int(program, &vm->programCounter);
         const std::string name = Read_String(program, &vm->programCounter);
         const int numArgs = Read_Int(program, &vm->programCounter);
         
-        Function func = {};
+        Block func = {};
         func.numArgs = numArgs;
         func.info.pc = functionOffset;
         func.info.size = functionSize;
+        func.info.name = name;
 
         for (int i = 0; i < numArgs; i++)
         {
@@ -1140,10 +1169,23 @@ static void ScanFunctions(VirtualMachine* vm, unsigned char* program)
         for (int i = 0; i < numFields; i++)
         {
             const std::string name = Read_String(program, &vm->programCounter);
-            func.info.parameters.push_back(name);
+            func.info.locals.push_back(name);
         }
 
-        vm->functions.insert(std::pair<std::string, Function>(name, func));
+        vm->blocks.push_back(func);
+    }
+
+    vm->functions.resize(numEntries);
+    for (int i = 0; i < numEntries; i++)
+    {
+        const int id = Read_Int(program, &vm->programCounter);
+        const int blk = Read_Int(program, &vm->programCounter);
+        const std::string name = Read_String(program, &vm->programCounter);
+
+        auto& entry = vm->functions[id];
+        entry.id = id;
+        entry.blk = blk;
+        entry.name = name;
     }
 
     vm->programOffset = vm->programCounter;
@@ -1153,13 +1195,22 @@ static void ScanDebugData(VirtualMachine* vm, unsigned char* debugData)
 {
     if (debugData)
     {
+        unsigned int size = 0;
+        for (auto& function : vm->blocks)
+        {
+            size += function.info.size;
+        }
+
+        vm->debugLines = new int[size];
+        std::memset(vm->debugLines, 0, size);
+
         unsigned int pos = 0;
         const int numLines = Read_Int(debugData, &pos);
         for (int i = 0; i < numLines; i++)
         {
             const int pc = Read_Int(debugData, &pos);
             const int line = Read_Int(debugData, &pos);
-            vm->debugLines.insert(std::pair<int, int>(pc, line));
+            vm->debugLines[pc] = line;
         }
     }
 }
@@ -1194,10 +1245,14 @@ static int ResumeScript2(VirtualMachine* vm, unsigned char* program)
 
     while (vm->running)
     {
-        const auto& lineIt = vm->debugLines.find(vm->programCounter - vm->programOffset);
-        if (lineIt != vm->debugLines.end())
+        //const auto& lineIt = vm->debugLines.find(vm->programCounter - vm->programOffset);
+        //if (lineIt != vm->debugLines.end())
+        //{
+        //    vm->debugLine = lineIt->second;
+        //}
+        if (vm->debugLines)
         {
-            vm->debugLine = lineIt->second;
+            vm->debugLine = vm->debugLines[vm->programCounter - vm->programOffset];
         }
 
         const unsigned char op = program[vm->programCounter++];
@@ -1233,9 +1288,6 @@ static int ResumeScript2(VirtualMachine* vm, unsigned char* program)
         case OP_YIELD:
             Op_Yield(vm);
             break;
-        case OP_LOCAL:
-            Op_Local(vm);
-            break;
         case OP_CMP:
             Op_Compare(vm);
             break;
@@ -1251,9 +1303,9 @@ static int ResumeScript2(VirtualMachine* vm, unsigned char* program)
         case OP_UNARY_MINUS:
             Op_Unary_Minus(vm);
             break;
-        case OP_FORMAT:
-            Op_Format(vm);
-            break;
+        //case OP_FORMAT:
+        //    Op_Format(vm);
+        //    break;
         case OP_RETURN:
             Op_Return(vm);
             break;
@@ -1297,8 +1349,20 @@ static int RunJIT(VirtualMachine* vm)
     void* data = vm->jit.jit_search_cache(vm->jit_instance, cacheKey);
     if (!data)
     {
-        FunctionInfo* info;
-        FindFunction(vm, "main", &info);
+        FunctionInfo* info = nullptr;
+        for (int i = 0; i < vm->blocks.size(); i++)
+        {
+            if (vm->blocks[i].info.name == "main")
+            {
+                info = &vm->blocks[i].info;
+                break;
+            }
+        }
+
+        if (!info)
+        {
+            return VM_ERROR;
+        }
 
         data = vm->jit.jit_compile(vm->jit_instance, vm, vm->program, info, "");
         if (data != nullptr)
@@ -1315,10 +1379,10 @@ static int RunJIT(VirtualMachine* vm)
             vm->running = false;
             vm->statusCode = VM_ERROR;
         }
-	else if (status == VM_YIELDED)
-	{
-	    vm->flags = VM_FLAGS_YIELD_JIT;
-	}
+    else if (status == VM_YIELDED)
+    {
+        vm->flags = VM_FLAGS_YIELD_JIT;
+    }
         return status;
     }
 
@@ -1344,13 +1408,24 @@ int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned ch
         }
     }
 
-    FunctionInfo* info;
-    if (FindFunction(vm, "main", &info) == VM_ERROR)
+    FunctionInfo* info = nullptr;
+    for (int i = 0; i < vm->blocks.size(); i++)
+    {
+        if (vm->blocks[i].info.name == "main")
+        {
+            info = &vm->blocks[i].info;
+            break;
+        }
+    }
+
+    if (!info)
     {
         return VM_ERROR;
     }
 
+    vm->main = info;
     vm->programCounter = info->pc + vm->programOffset;
+    vm->locals.resize(info->locals.size() + info->parameters.size());
     info->counter++;
 
     return ResumeScript2(vm, program);
@@ -1379,7 +1454,7 @@ void SunScript::PushReturnValue(VirtualMachine* vm, const std::string& value)
 {
     if (vm->statusCode == VM_OK)
     {
-        Push_String(vm, value);
+        Push_String(vm, value.c_str());
     }
 }
 
@@ -1441,7 +1516,7 @@ int SunScript::GetParamString(VirtualMachine* vm, std::string* param)
 
 int SunScript::PushParamString(VirtualMachine* vm, const std::string& param)
 {
-    Push_String(vm, param);
+    Push_String(vm, param.c_str());
     return VM_OK;
 }
 
@@ -1460,12 +1535,13 @@ void SunScript::InvokeHandler(VirtualMachine* vm, const std::string& callName, i
     vm->handler(vm);
 }
 
-int SunScript::FindFunction(VirtualMachine* vm, const std::string& callName, FunctionInfo** info)
+int SunScript::FindFunction(VirtualMachine* vm, int id, FunctionInfo** info)
 {
-    const auto& it = vm->functions.find(callName);
-    if (it != vm->functions.end())
+    if (id >= 0 && id < vm->functions.size())
     {
-        *info = &it->second.info;
+        const auto& func = vm->functions[id];
+
+        *info = &vm->blocks[func.blk].info;
         return VM_OK;
     }
 
@@ -1485,6 +1561,11 @@ Program* SunScript::CreateProgram()
     return prog;
 }
 
+int SunScript::CreateFunction(Program* program)
+{
+    return program->numFunctions++;
+}
+
 ProgramBlock* SunScript::CreateProgramBlock(bool topLevel, const std::string& name, int numArgs)
 {
     ProgramBlock* block = new ProgramBlock();
@@ -1493,6 +1574,7 @@ ProgramBlock* SunScript::CreateProgramBlock(bool topLevel, const std::string& na
     block->topLevel = topLevel;
     block->name = name;
     block->numLabels = 0;
+    block->id = -1;
 
     return block;
 }
@@ -1512,15 +1594,24 @@ void SunScript::ResetProgram(Program* program)
 
 int SunScript::GetProgram(Program* program, unsigned char** programData)
 {
-    const int size = int(program->data.size() + program->functions.size() + sizeof(std::int32_t));
+    const int size = int(program->data.size() + program->functions.size() + program->entries.size() + sizeof(std::int32_t) * 2);
     *programData = new unsigned char[size];
+
+    const size_t numBlocks = program->blocks.size();
+    (*programData)[0] = (unsigned char)(numBlocks & 0xFF);
+    (*programData)[1] = (unsigned char)((numBlocks >> 8) & 0xFF);
+    (*programData)[2] = (unsigned char)((numBlocks >> 16) & 0xFF);
+    (*programData)[3] = (unsigned char)((numBlocks >> 24) & 0xFF);
+
     const int numFunctions = program->numFunctions;
-    (*programData)[0] = (unsigned char)(numFunctions & 0xFF);
-    (*programData)[1] = (unsigned char)((numFunctions >> 8) & 0xFF);
-    (*programData)[2] = (unsigned char)((numFunctions >> 16) & 0xFF);
-    (*programData)[3] = (unsigned char)((numFunctions >> 24) & 0xFF);
-    std::memcpy(*programData + sizeof(std::int32_t), program->functions.data(), program->functions.size());
-    std::memcpy(*programData + program->functions.size() + sizeof(std::int32_t), program->data.data(), program->data.size());
+    (*programData)[4] = (unsigned char)(numFunctions & 0xFF);
+    (*programData)[5] = (unsigned char)((numFunctions >> 8) & 0xFF);
+    (*programData)[6] = (unsigned char)((numFunctions >> 16) & 0xFF);
+    (*programData)[7] = (unsigned char)((numFunctions >> 24) & 0xFF);
+
+    std::memcpy(*programData + sizeof(std::int32_t) * 2, program->functions.data(), program->functions.size());
+    std::memcpy(*programData + program->functions.size() + sizeof(std::int32_t) * 2, program->entries.data(), program->entries.size());
+    std::memcpy(*programData + program->functions.size() + program->entries.size() + sizeof(std::int32_t) * 2, program->data.data(), program->data.size());
     return size;
 }
 
@@ -1557,7 +1648,11 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
     {
         for (auto& func : vm->functions)
         {
-            ss << (func.second.info.pc + vm->programOffset) << " " << func.first << "(" << func.second.numArgs << ")" << std::endl;
+            if (func.blk != -1)
+            {
+                auto& blk = vm->blocks[func.blk];
+                ss << (blk.info.pc + vm->programOffset) << " " << blk.info.name << "(" << blk.numArgs << ")" << std::endl;
+            }
         }
     }
     else
@@ -1603,11 +1698,8 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
         case OP_JUMP:
             ss << "OP_JUMP " << int(Read_Byte(programData, &vm->programCounter)) << " " << int(Read_Short(programData, &vm->programCounter)) << std::endl;
             break;
-        case OP_LOCAL:
-            ss << "OP_LOCAL " << Read_String(programData, &vm->programCounter) << std::endl;
-            break;
         case OP_POP:
-            ss << "OP_POP " << Read_String(programData, &vm->programCounter) << std::endl;
+            ss << "OP_POP " << int(Read_Byte(programData, &vm->programCounter)) << std::endl;
             break;
         case OP_POP_DISCARD:
             ss << "OP_POP_DISCARD" << std::endl;
@@ -1626,7 +1718,7 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
         }
             break;
         case OP_PUSH_LOCAL:
-            ss << "OP_PUSH_LOCAL " << Read_String(programData, &vm->programCounter) << std::endl;
+            ss << "OP_PUSH_LOCAL " << int(Read_Byte(programData, &vm->programCounter)) << std::endl;
             break;
         case OP_RETURN:
             ss << "OP_RETURN" << std::endl;
@@ -1648,7 +1740,7 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             ss << "OP_YIELD " << Read_String(programData, &vm->programCounter) << std::endl;
             break;
         case OP_CALL:
-            ss << "OP_CALL " << int(Read_Byte(programData, &vm->programCounter)) << " " << Read_String(programData, &vm->programCounter) << std::endl;
+            ss << "OP_CALL " << int(Read_Byte(programData, &vm->programCounter)) << " " << Read_Int(programData, &vm->programCounter) << std::endl;
             break;
         case OP_DONE:
             ss << "OP_DONE" << std::endl;
@@ -1678,29 +1770,53 @@ static void EmitString(std::vector<unsigned char>& data, const std::string& valu
     data.push_back(0);
 }
 
+void SunScript::EmitInternalFunction(Program* program, ProgramBlock* blk, int func)
+{
+    EmitInt(program->entries, func);
+    EmitInt(program->entries, blk->id);
+    EmitString(program->entries, blk->name);
+}
+
+void SunScript::EmitExternalFunction(Program* program, int func, const std::string& name)
+{
+    EmitInt(program->entries, func);
+    EmitInt(program->entries, -1);
+    EmitString(program->entries, name);
+}
+
+void SunScript::FlushBlocks(Program* program)
+{
+    for (int i = 0; i < program->blocks.size(); i++)
+    {
+        auto& block = program->blocks[i];
+
+        const int offset = int(program->data.size());
+        const int size = int(block->data.size());
+
+        EmitInt(program->functions, offset);
+        EmitInt(program->functions, size);
+        EmitString(program->functions, block->name);
+        EmitInt(program->functions, block->numArgs);
+        for (auto& arg : block->args)
+        {
+            EmitString(program->functions, arg);
+        }
+        EmitInt(program->functions, int(block->fields.size()));
+        for (auto& field : block->fields)
+        {
+            EmitString(program->functions, field);
+        }
+
+        program->data.insert(program->data.end(), block->data.begin(), block->data.end());
+        program->debug.insert(program->debug.end(), block->debug.begin(), block->debug.end());
+        program->numLines += block->numLines;
+    }
+}
+
 void SunScript::EmitProgramBlock(Program* program, ProgramBlock* block)
 {
-    const int offset = int(program->data.size());
-    const int size = int(block->data.size());
-
-    EmitInt(program->functions, offset);
-    EmitInt(program->functions, size);
-    EmitString(program->functions, block->name);
-    EmitInt(program->functions, block->numArgs);
-    for (auto& arg : block->args)
-    {
-        EmitString(program->functions, arg);
-    }
-    EmitInt(program->functions, int(block->fields.size()));
-    for (auto& field : block->fields)
-    {
-        EmitString(program->functions, field);
-    }
-
-    program->data.insert(program->data.end(), block->data.begin(), block->data.end());
-    program->debug.insert(program->debug.end(), block->debug.begin(), block->debug.end());
-    program->numLines += block->numLines;
-    program->numFunctions++;
+    block->id = int(program->blocks.size());
+    program->blocks.push_back(block);
 }
 
 void SunScript::EmitReturn(ProgramBlock* program)
@@ -1715,32 +1831,29 @@ void SunScript::EmitParameter(ProgramBlock* program, const std::string& name)
 
 void SunScript::EmitLocal(ProgramBlock* program, const std::string& name)
 {
-    program->data.push_back(OP_LOCAL);
-    EmitString(program->data, name);
-
     program->fields.push_back(name);
 }
 
-void SunScript::EmitSet(ProgramBlock* program, const std::string& name, int value)
+void SunScript::EmitSet(ProgramBlock* program, const unsigned char local, int value)
 {
     program->data.push_back(OP_SET);
     program->data.push_back(TY_INT);
-    EmitString(program->data, name);
+    program->data.push_back(local);
     EmitInt(program->data, value);
 }
 
-void SunScript::EmitSet(ProgramBlock* program, const std::string& name, const std::string& value)
+void SunScript::EmitSet(ProgramBlock* program, const unsigned char local, const std::string& value)
 {
     program->data.push_back(OP_SET);
     program->data.push_back(TY_STRING);
-    EmitString(program->data, name);
+    program->data.push_back(local);
     EmitString(program->data, value);
 }
 
-void SunScript::EmitPushLocal(ProgramBlock* program, const std::string& localName)
+void SunScript::EmitPushLocal(ProgramBlock* program, unsigned char local)
 {
     program->data.push_back(OP_PUSH_LOCAL);
-    EmitString(program->data, localName);
+    program->data.push_back(local);
 }
 
 void SunScript::EmitPush(ProgramBlock* program, int value)
@@ -1757,10 +1870,10 @@ void SunScript::EmitPush(ProgramBlock* program, const std::string& value)
     EmitString(program->data, value);
 }
 
-void SunScript::EmitPop(ProgramBlock* program, const std::string& localName)
+void SunScript::EmitPop(ProgramBlock* program, unsigned char local)
 {
     program->data.push_back(OP_POP);
-    EmitString(program->data, localName);
+    program->data.push_back(local);
 }
 
 void SunScript::EmitPop(ProgramBlock* program)
@@ -1775,11 +1888,11 @@ void SunScript::EmitYield(ProgramBlock* program, const std::string& name, unsign
     EmitString(program->data, name);
 }
 
-void SunScript::EmitCall(ProgramBlock* program, const std::string& name, unsigned char numArgs)
+void SunScript::EmitCall(ProgramBlock* program, int func, unsigned char numArgs)
 {
     program->data.push_back(OP_CALL);
     program->data.push_back(numArgs);
-    EmitString(program->data, name);
+    EmitInt(program->data, func);
 }
 
 void SunScript::EmitAdd(ProgramBlock* program)
