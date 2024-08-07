@@ -453,7 +453,7 @@ static char* Read_String(unsigned char* program, unsigned int* pc)
 {
     char* str = (char*)&program[*pc];
     const size_t len = strlen(str) + 1;
-    *pc += unsigned int(len);
+    *pc += static_cast<unsigned int>(len);
     return str;
 }
 
