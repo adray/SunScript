@@ -1123,10 +1123,8 @@ static void Op_Compare(VirtualMachine* vm)
 
 static void ResetVM(VirtualMachine* vm)
 {
-    vm->program = nullptr;
     vm->mm.Reset();
     vm->programCounter = 0;
-    vm->programOffset = 0;
     vm->stackBounds = 0;
     vm->errorCode = 0;
     vm->flags = 0;
@@ -1137,9 +1135,6 @@ static void ResetVM(VirtualMachine* vm)
     while (!vm->stack.empty()) { vm->stack.pop(); }
     while (!vm->frames.empty()) { vm->frames.pop(); }
     vm->locals.clear();
-    vm->functions.clear();
-    vm->blocks.clear();
-    delete[] vm->debugLines;
 }
 
 static void ScanFunctions(VirtualMachine* vm, unsigned char* program)
@@ -1215,14 +1210,13 @@ static void ScanDebugData(VirtualMachine* vm, unsigned char* debugData)
     }
 }
 
-static void StartVM(VirtualMachine* vm, unsigned char* program)
+static void StartVM(VirtualMachine* vm)
 {
     vm->running = true;
     vm->statusCode = vm->resumeCode;
     vm->resumeCode = VM_OK;
     vm->startTime = vm->clock.now();
     vm->instructionsExecuted = 0;
-    vm->program = program;
 }
 
 inline static void CheckForTimeout(VirtualMachine* vm)
@@ -1239,9 +1233,9 @@ inline static void CheckForTimeout(VirtualMachine* vm)
     }
 }
 
-static int ResumeScript2(VirtualMachine* vm, unsigned char* program)
+static int ResumeScript2(VirtualMachine* vm)
 {
-    StartVM(vm, program);
+    StartVM(vm);
 
     while (vm->running)
     {
@@ -1255,7 +1249,7 @@ static int ResumeScript2(VirtualMachine* vm, unsigned char* program)
             vm->debugLine = vm->debugLines[vm->programCounter - vm->programOffset];
         }
 
-        const unsigned char op = program[vm->programCounter++];
+        const unsigned char op = vm->program[vm->programCounter++];
 
         switch (op)
         {
@@ -1327,22 +1321,12 @@ static int ResumeScript2(VirtualMachine* vm, unsigned char* program)
     return vm->statusCode;
 }
 
-int SunScript::RunScript(VirtualMachine* vm, unsigned char* program)
+int SunScript::RunScript(VirtualMachine* vm)
 {
-    return RunScript(vm, program, nullptr);
+    return RunScript(vm, std::chrono::duration<int, std::nano>::zero());
 }
 
-int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData)
-{
-    return RunScript(vm, program, debugData, std::chrono::duration<int, std::nano>::zero());
-}
-
-int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, std::chrono::duration<int, std::nano> timeout)
-{
-    return RunScript(vm, program, nullptr, timeout);
-}
-
-static int RunJIT(VirtualMachine* vm)
+/*static int RunJIT(VirtualMachine* vm)
 {
     const std::string cacheKey = "@main_";
 
@@ -1387,26 +1371,16 @@ static int RunJIT(VirtualMachine* vm)
     }
 
     return VM_DEOPTIMIZE;
-}
+}*/
 
-int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData, std::chrono::duration<int, std::nano> timeout)
+int SunScript::LoadProgram(VirtualMachine* vm, unsigned char* program, unsigned char* debugData)
 {
-    ResetVM(vm);
+    vm->program = program;
+    vm->blocks.clear();
+    vm->functions.clear();
+    delete[] vm->debugLines;
     ScanFunctions(vm, program);
     ScanDebugData(vm, debugData);
-
-    // Convert timeout to nanoseconds (or whatever it may be specified in)
-    vm->timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout).count();
-
-    if (vm->jit_instance)
-    {
-        StartVM(vm, program);
-        const int status = RunJIT(vm);
-        if (status != VM_DEOPTIMIZE)
-        {
-            return status;
-        }
-    }
 
     FunctionInfo* info = nullptr;
     for (int i = 0; i < vm->blocks.size(); i++)
@@ -1424,14 +1398,60 @@ int SunScript::RunScript(VirtualMachine* vm, unsigned char* program, unsigned ch
     }
 
     vm->main = info;
-    vm->programCounter = info->pc + vm->programOffset;
-    vm->locals.resize(info->locals.size() + info->parameters.size());
-    info->counter++;
 
-    return ResumeScript2(vm, program);
+    return VM_OK;
 }
 
-int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
+int SunScript::LoadProgram(VirtualMachine* vm, unsigned char* program)
+{
+    return LoadProgram(vm, program, nullptr);
+}
+
+int SunScript::RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nano> timeout)
+{
+    ResetVM(vm);
+    //ScanFunctions(vm, program);
+    //ScanDebugData(vm, debugData);
+
+    // Convert timeout to nanoseconds (or whatever it may be specified in)
+    vm->timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout).count();
+
+    /*if (vm->jit_instance)
+    {
+        StartVM(vm, program);
+        const int status = RunJIT(vm);
+        if (status != VM_DEOPTIMIZE)
+        {
+            return status;
+        }
+    }*/
+
+    /*FunctionInfo* info = nullptr;
+    for (int i = 0; i < vm->blocks.size(); i++)
+    {
+        if (vm->blocks[i].info.name == "main")
+        {
+            info = &vm->blocks[i].info;
+            break;
+        }
+    }
+
+    if (!info)
+    {
+        return VM_ERROR;
+    }
+
+    vm->main = info;
+    */
+
+    vm->programCounter = vm->main->pc + vm->programOffset;
+    vm->locals.resize(vm->main->locals.size() + vm->main->parameters.size());
+    vm->main->counter++;
+
+    return ResumeScript2(vm);
+}
+
+int SunScript::ResumeScript(VirtualMachine* vm)
 {
     if (vm->jit_instance && ((vm->flags & VM_FLAGS_YIELD_JIT) == VM_FLAGS_YIELD_JIT))
     {
@@ -1447,7 +1467,7 @@ int SunScript::ResumeScript(VirtualMachine* vm, unsigned char* program)
 	return status;
     }
 
-    return ResumeScript2(vm, program);
+    return ResumeScript2(vm);
 }
 
 void SunScript::PushReturnValue(VirtualMachine* vm, const std::string& value)

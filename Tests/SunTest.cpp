@@ -120,12 +120,13 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     const int runCount = 10000;
     if (program)
     {
+	LoadProgram(vm, program);
         for (int i = 0; i < runCount; i++)
         {
-            int errorCode = RunScript(vm, program);
+            int errorCode = RunScript(vm);
             while (errorCode == VM_YIELDED)
             {
-                errorCode = ResumeScript(vm, program);
+                errorCode = ResumeScript(vm);
             }
 
             if (errorCode == VM_ERROR)

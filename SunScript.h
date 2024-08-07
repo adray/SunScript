@@ -197,15 +197,17 @@ namespace SunScript
     */
     int LoadScript(const std::string& filepath, unsigned char** program);
 
-    int RunScript(VirtualMachine* vm, unsigned char* program);
+    /* Loads a program into the virtual machine. */
+    int LoadProgram(VirtualMachine* vm, unsigned char* program);
 
-    int RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData);
+    /* Loads a program into the virtual machine. */
+    int LoadProgram(VirtualMachine* vm, unsigned char* program, unsigned char* debugData);
 
-    int RunScript(VirtualMachine* vm, unsigned char* program, std::chrono::duration<int, std::nano> timeout);
+    int RunScript(VirtualMachine* vm);
 
-    int RunScript(VirtualMachine* vm, unsigned char* program, unsigned char* debugData, std::chrono::duration<int, std::nano> timeout);
+    int RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nano> timeout);
 
-    int ResumeScript(VirtualMachine* vm, unsigned char* program);
+    int ResumeScript(VirtualMachine* vm);
 
     void PushReturnValue(VirtualMachine* vm, const std::string& value);
     

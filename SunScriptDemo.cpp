@@ -69,7 +69,8 @@ void SunScript::Demo1(int _42)
 
     VirtualMachine* vm = CreateVirtualMachine();
     SetHandler(vm, Handler);
-    RunScript(vm, programData);
+    LoadProgram(vm, programData);
+    RunScript(vm);
     
     delete[] programData;
     ShutdownVirtualMachine(vm);
@@ -109,7 +110,8 @@ void SunScript::Demo2()
 
     VirtualMachine* vm = CreateVirtualMachine();
     SetHandler(vm, Handler);
-    RunScript(vm, programData);
+    LoadProgram(vm, programData);
+    RunScript(vm);
 
     delete[] programData;
     ShutdownVirtualMachine(vm);
@@ -157,7 +159,8 @@ void SunScript::Demo3()
 
     VirtualMachine* vm = CreateVirtualMachine();
     SetHandler(vm, Handler);
-    RunScript(vm, programData);
+    LoadProgram(vm, programData);
+    RunScript(vm);
 
     delete[] programData;
     ShutdownVirtualMachine(vm);
@@ -207,21 +210,29 @@ static void RunDemoScript(const std::string& filename, const std::string& str, b
                 SunScript::SetJIT(vm, &jit);
             }
 
-            const int status = SunScript::RunScript(vm, programData, debugData);
+	    int status = LoadProgram(vm, programData, debugData);
             if (status == VM_ERROR)
-            {
-                std::cout << "Error running demo script." << std::endl;
-                DumpCallstack(vm);
-            }
+	    {
+	        std::cout << "Error load demo script." << std::endl;
+	    }
             else if (status == VM_OK)
-            {
-                std::cout << "Script completed." << std::endl;
-            }
+	    {
+	        status = SunScript::RunScript(vm);
+                if (status == VM_ERROR)
+                {
+                    std::cout << "Error running demo script." << std::endl;
+                    DumpCallstack(vm);
+                }
+                else if (status == VM_OK)
+                {
+                    std::cout << "Script completed." << std::endl;
+                }
 
-            if (jit_enabled)
-            {
-                std::cout << SunScript::JITStats(vm) << std::endl;
-            }
+                if (jit_enabled)
+                {
+                    std::cout << SunScript::JITStats(vm) << std::endl;
+                }
+	    }
 
             ShutdownVirtualMachine(vm);
         }
