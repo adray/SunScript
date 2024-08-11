@@ -123,6 +123,7 @@ namespace SunScript
         void* (*jit_initialize) (void);
         void* (*jit_compile) (void* instance, VirtualMachine* vm, unsigned char* program, 
             FunctionInfo* info, const std::string& signature);
+	void* (*jit_compile_trace) (void* instance, VirtualMachine* vm, unsigned char* trace, int size);
         int (*jit_execute) (void* instance, void* data);
         int (*jit_resume) (void* instance);
         void* (*jit_search_cache) (void* instance, const std::string& key);
@@ -136,7 +137,6 @@ namespace SunScript
     constexpr int VM_YIELDED = 2;
     constexpr int VM_PAUSED = 3;
     constexpr int VM_TIMEOUT = 4;
-    constexpr int VM_DEOPTIMIZE = 5;
 
     constexpr int ERR_NONE = 0;
     constexpr int ERR_INTERNAL = 1;
@@ -229,6 +229,8 @@ namespace SunScript
 
     int FindFunction(VirtualMachine* vm, int id, FunctionInfo** info);
 
+    const char* FindFunctionName(VirtualMachine* vm, int id);
+
     unsigned char* GetLoadedProgram(VirtualMachine* vm);
 
     Program* CreateProgram();
@@ -277,7 +279,7 @@ namespace SunScript
 
     void EmitPop(ProgramBlock* program);
 
-    void EmitYield(ProgramBlock* program, const std::string& name, unsigned char numArgs);
+    void EmitYield(ProgramBlock* program, int func, unsigned char numArgs);
 
     void EmitCall(ProgramBlock* program, int func, unsigned char numArgs);
 

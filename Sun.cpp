@@ -984,7 +984,7 @@ void Parser::EmitExpr(Expr* expr)
             if (call->Yield())
             {
                 EmitDebug(block, tok.Line());
-                EmitYield(block, tok.String(), static_cast<unsigned char>(args.size()));
+                EmitYield(block, id, static_cast<unsigned char>(args.size()));
             }
             else
             {

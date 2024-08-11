@@ -13,8 +13,6 @@
 
 #ifdef WIN32
 #include <Windows.h>
-#else
-//#include <linux.h>
 #endif
 
 using namespace SunScript;
@@ -42,6 +40,18 @@ enum vm_register
 
     VM_REGISTER_MAX = 0x10
 };
+
+#if WIN32
+#define VM_ARG1 VM_REGISTER_ECX
+#define VM_ARG2 VM_REGISTER_EDX
+#define VM_ARG3 VM_REGISTER_R8
+#define VM_ARG4 VM_REGISTER_R9
+#else
+#define VM_ARG1 VM_REGISTER_EDI
+#define VM_ARG2 VM_REGISTER_ESI
+#define VM_ARG3 VM_REGISTER_EDX
+#define VM_ARG4 VM_REGISTER_ECX
+#endif
 
 enum vm_instruction_type
 {
@@ -1089,8 +1099,8 @@ public:
         // Reserved registers
         registers[VM_REGISTER_ESP] = true;
         registers[VM_REGISTER_EBP] = true;
-        registers[VM_REGISTER_EDI] = true;
-        registers[VM_REGISTER_ESI] = true;
+        //registers[VM_REGISTER_EDI] = true;
+        //registers[VM_REGISTER_ESI] = true;
     }
 
     int Allocate(int reg)
@@ -1250,15 +1260,6 @@ struct JIT_Patch
     int _size;
 };
 
-struct JIT_Method;
-
-struct JIT_SunStub
-{
-    int _numArgs;
-    JIT_Patch _patch;
-    JIT_Method* _stubMethod;
-};
-
 struct JIT_BackwardJump
 {
     int _state;
@@ -1276,63 +1277,20 @@ struct JIT_Jump
     int _size;
 };
 
-struct JIT_Method
+struct JIT_Trace
 {
     void* _jit_data;
     int _size;
     int _jumpPos;
 
-    std::string _cacheKey;
-    std::string _signature;
     int _id;
 
-    std::vector<JIT_SunStub> _stubs;
     std::vector<JIT_Jump> _forwardJumps;
     std::vector<JIT_BackwardJump> _backwardJumps;
 
     uint64_t _startTime;     // compilation start time
     uint64_t _endTime;       // compilation end time
     uint64_t _runCount;      // number of times the method has been invoked
-};
-
-class JIT_Cache
-{
-public:
-    int CacheJIT(const std::string& key, JIT_Method* jit)
-    {
-        const auto& it = _cache.find(key);
-        if (it != _cache.end())
-        {
-            return VM_ERROR;
-        }
-
-        _cache.insert(std::pair<std::string, JIT_Method*>(key, jit));
-
-        return VM_OK;
-    }
-
-    JIT_Method* SearchJITCache(const std::string& key)
-    {
-        const auto& it = _cache.find(key);
-        if (it != _cache.end())
-        {
-
-            return it->second;
-        }
-
-        return nullptr;
-    }
-
-    void GetData(std::vector<JIT_Method*>& methods)
-    {
-        for (auto& item : _cache)
-        {
-            methods.push_back(item.second);
-        }
-    }
-
-private:
-    std::unordered_map<std::string, JIT_Method*> _cache;
 };
 
 class JIT_Coroutine
@@ -1347,46 +1305,11 @@ public:
     long long _stackSize;
 };
 
-class JIT_TraceData
-{
-public:
-    unsigned char _pc;
-    std::vector<unsigned char> _trace;
-    void* _jit_data;
-
-    JIT_TraceData();
-};
-
-JIT_TraceData::JIT_TraceData()
-    :
-    _pc(0),
-    _jit_data(nullptr)
-{
-}
-
-class JIT_TraceCache
-{
-public:
-
-    JIT_TraceCache();
-
-    JIT_TraceData _cache[8];
-    int _cacheCount;
-};
-
-JIT_TraceCache::JIT_TraceCache() :
-    _cacheCount(0)
-{
-    std::memset(_cache, 0, sizeof(_cache));
-}
-
 class JIT_Manager
 {
 public:
     MemoryManager _mm;
-    JIT_Cache _cache;
     JIT_Coroutine _co;
-    JIT_TraceCache _traceCache;
 };
 
 class Jitter
@@ -1399,7 +1322,7 @@ public:
     RegisterAllocator allocator;
     VirtualStack stack;
     std::vector<Local> locals;
-    JIT_Method* _method;
+    JIT_Trace* _trace;
     JIT_Manager* _manager;
     JIT_FlowGraph fg;
     FunctionInfo* info;
@@ -1414,7 +1337,7 @@ public:
         pc(nullptr),
         running(true),
         error(false),
-        _method(nullptr),
+        _trace(nullptr),
         argsProcessed(0),
         _manager(nullptr)
     {
@@ -1471,20 +1394,28 @@ void vm_commit_patch(void* data, int size)
     }
 }
 #else
-
+#include <sys/mman.h>
 void* vm_allocate(int size)
 {
-    return nullptr;
+    void* data = mmap(nullptr, size, PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (data == MAP_FAILED)
+    {
+	std::cout << errno << std::endl;
+	abort();
+    }
+    return data;
 }
 
 void vm_initialize(void* data, unsigned char* jit, int size)
 {
-    
+    std::memcpy(data, jit, size);
+    mprotect(data, size, PROT_EXEC | PROT_READ);
+    //cacheflush(0, size, ICACHE);
 }
 
 void vm_free(void* data, int size)
 {
-    
+    munmap(data, size);
 }
 
 void vm_begin_patch(void* data, int size)
@@ -1560,84 +1491,20 @@ extern "C"
         data[s.length()] = '\0';
         return data;
     }
-
-    static void vm_call_sun_stub(JIT_Manager* mm, VirtualMachine* vm, JIT_Method* caller, JIT_Method* stub)
-    {
-        /*
-        * The stub is a method specifically generated for the caller method.
-        * It is stored in the cache appended to the caller name.
-        * 
-        * The stub method itself has a stub which points to NULL.
-        * This should be patched.
-        * 
-        * The method which owns the stub method has at least one stub to patch.
-        */
-
-        bool cache = false;
-        void* data = mm->_cache.SearchJITCache(stub->_cacheKey);
-        if (!data)
-        {
-            FunctionInfo* info;
-            if (VM_OK == FindFunction(vm, stub->_id, &info))
-            {
-                data = JIT_Compile(mm, vm, GetLoadedProgram(vm), info, stub->_signature);
-                cache = true;
-            }
-
-            if (!data)
-            {
-                return;
-            }
-        }
-
-        JIT_Method* method = reinterpret_cast<JIT_Method*>(data);
-
-        // We need to replace the caller stub call address with a JIT compiled version.
-
-        for (auto& s : stub->_stubs)
-        {
-            if (s._patch._state == PATCH_INITIALIZED)
-            {
-                vm_begin_patch(s._patch._data, s._patch._size);
-                vm_mov_imm_to_reg_x64((unsigned char*)s._patch._data, s._patch._offset, s._patch._reg, (long long)method->_jit_data);
-                vm_commit_patch(s._patch._data, s._patch._size);
-
-                s._patch._state = PATCH_APPLIED;
-            }
-        }
-
-        for (auto& s : caller->_stubs)
-        {
-            auto& patch = s._patch;
-            if (patch._state == PATCH_INITIALIZED && s._stubMethod == stub)
-            {
-                vm_begin_patch(patch._data, patch._size);
-                vm_mov_imm_to_reg_x64((unsigned char*)patch._data, patch._offset, patch._reg, (long long)method->_jit_data);
-                vm_commit_patch(patch._data, patch._size);
-
-                patch._state = PATCH_APPLIED;
-            }
-        }
-
-        if (cache)
-        {
-            mm->_cache.CacheJIT(stub->_cacheKey, method);
-        }
-    }
 }
 
 // =================================
 
 static void vm_jit_call_internal_x64(Jitter* jitter, int numParams, void* address, int retType)
 {
-    jitter->allocator.Allocate(VM_REGISTER_ECX);
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ECX, (long long)jitter->_manager);
+    jitter->allocator.Allocate(VM_ARG1);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)jitter->_manager);
 
     int registers[4] = {
-        VM_REGISTER_ECX,
-        VM_REGISTER_EDX,
-        VM_REGISTER_R8,
-        VM_REGISTER_R9
+        VM_ARG1,
+        VM_ARG2,
+        VM_ARG3,
+        VM_ARG4
     };
     for (int i = 1; i <= numParams; i++)
     {
@@ -1739,6 +1606,10 @@ static void vm_jit_pop(Jitter* jitter)
 
         local.type = it.type;
     }
+    else
+    {
+	jitter->SetError();
+    }
 }
 
 static void vm_jit_push_local(Jitter* jitter)
@@ -1836,16 +1707,16 @@ static void vm_jit_patch_next_jump(Jitter* jitter)
 {
     bool cont = true;
     
-    while (jitter->_method->_jumpPos < jitter->_method->_forwardJumps.size() && cont)
+    while (jitter->_trace->_jumpPos < jitter->_trace->_forwardJumps.size() && cont)
     {
         cont = false;
 
-        auto& jump = jitter->_method->_forwardJumps[jitter->_method->_jumpPos];
+        auto& jump = jitter->_trace->_forwardJumps[jitter->_trace->_jumpPos];
         if (*jitter->pc == jump._pos &&
             jump._state == PATCH_INITIALIZED)
         {
             cont = true;
-            jitter->_method->_jumpPos++;
+            jitter->_trace->_jumpPos++;
             jump._state = PATCH_APPLIED;
 
             const int rel = jitter->count - (jump._offset + jump._size);
@@ -1930,17 +1801,17 @@ static void vm_jit_jump(Jitter* jitter)
 
         jump._size = jitter->count - jump._offset;
 
-        const auto& pos = std::lower_bound(jitter->_method->_forwardJumps.begin(), jitter->_method->_forwardJumps.end(), jump, [](const JIT_Jump& j1, const JIT_Jump& j2) {
+        const auto& pos = std::lower_bound(jitter->_trace->_forwardJumps.begin(), jitter->_trace->_forwardJumps.end(), jump, [](const JIT_Jump& j1, const JIT_Jump& j2) {
             return j1._pos < j2._pos;
             });
-        jitter->_method->_forwardJumps.insert(pos, jump);
+        jitter->_trace->_forwardJumps.insert(pos, jump);
     }
     else
     {
         // Backward jump (no patching)
-        for (size_t i = 0; i < jitter->_method->_backwardJumps.size(); i++)
+        for (size_t i = 0; i < jitter->_trace->_backwardJumps.size(); i++)
         {
-            auto& jump = jitter->_method->_backwardJumps[i];
+            auto& jump = jitter->_trace->_backwardJumps[i];
             if (offset + *jitter->pc == jump._target)
             {
                 const int imm = jump._pos - (jitter->count + 2 /*Length of jump instruction*/);
@@ -2265,291 +2136,112 @@ static void vm_jit_neg(Jitter* jitter)
     }
 }
 
-static void* vm_jit_sun_stub(VirtualMachine* vm, Jitter* jitter, JIT_Method* method, int numParams, const char* name, const std::string& signature)
+static void vm_jit_call_push_stub(VirtualStack& stack, VirtualMachine* vm, unsigned char* jit, int& count)
 {
-    auto& stub = method->_stubs.emplace_back();
-
-    stub._numArgs = numParams;
-    stub._patch._state = PATCH_INITIALIZED;
-    stub._stubMethod = nullptr;
-
-    unsigned char jit[512];
-    int count = 0;
-
-    vm_push_reg(jit, count, VM_REGISTER_EDI);
-    vm_push_reg(jit, count, VM_REGISTER_ESP);
-    vm_push_reg(jit, count, VM_REGISTER_EBX);
-    vm_sub_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, 32); // grow stack enough for callees
-
-    // 1) Push the parameter registers onto the stack
-
-    if (numParams >= 1)
+    StackItem item = stack.Pop();
+    if (item.store == ST_REG)
     {
-        vm_mov_reg_to_memory_x64(jit, count, VM_REGISTER_EDI, 16, VM_REGISTER_ECX);
+	vm_mov_reg_to_reg_x64(jit, count, VM_ARG2, item.reg);
     }
-    if (numParams >= 2)
+    else if (item.store == ST_STACK)
     {
-        vm_mov_reg_to_memory_x64(jit, count, VM_REGISTER_EDI, 24, VM_REGISTER_EDX);
+	vm_mov_memory_to_reg_x64(jit, count, VM_ARG2, item.reg, item.pos);
     }
-
-    // 2) Call the 'vm_call_sun_stub' to Trigger JIT compilation.
-
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_ECX, (long long)jitter->_manager);
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EDX, (long long)vm);
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R8, (long long)jitter->_method);
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R9, (long long)method);
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EBX, (long long)vm_call_sun_stub);
-    vm_call_absolute(jit, count, VM_REGISTER_EBX);
-
-    // 3) Restore the parameter registers
-    
-    if (numParams >= 1)
-    {
-        vm_mov_memory_to_reg_x64(jit, count, VM_REGISTER_ECX, VM_REGISTER_EDI, 16);
-    }
-
-    // 4) Output a call to NULL. When JIT compilation occurs this will be patched to
-    //    point to the newly compiled method. The registers which were passed to this
-    //    will be forwarded to the new method.
-
-    stub._patch._offset = count;
-
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EBX, (long long)0);
-    vm_call_absolute(jit, count, VM_REGISTER_EBX);
-
-    vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, 32); // free stack
-
-    // Restore volatile registers
-    vm_pop_reg(jit, count, VM_REGISTER_EBX);
-    vm_pop_reg(jit, count, VM_REGISTER_ESP);
-    vm_pop_reg(jit, count, VM_REGISTER_EDI);
-    vm_return(jit, count);
-
-    void* data = vm_allocate(count);
-    vm_initialize(data, jit, count);
-    method->_size = count;
-    stub._patch._data = data;
-    stub._patch._size = count;
-    stub._patch._reg = VM_REGISTER_EBX;
-    return data;
-}
-
-static void vm_jit_call_push_stub(VirtualStack& stack, VirtualMachine* vm, unsigned char* jit, int& count, int param)
-{
-    StackItem item;
-    stack.Peek(param, &item);
 
     if (item.type == TY_INT)
     {
-        vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EBX, (long long)vm_push_int_stub);
+        vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R13, (long long)vm_push_int_stub);
     }
     else if (item.type == TY_STRING)
     {
-        vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EBX, (long long)vm_push_string_stub);
+        vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R13, (long long)vm_push_string_stub);
     }
 
-    // Store the VM pointer in ECX.
+    // Store the VM pointer in ARG1.
     // We do this each time in case the register is cleared.
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_ECX, (long long)vm);
+    vm_mov_imm_to_reg_x64(jit, count, VM_ARG1, (long long)vm);
 
     // Call the function.
-    vm_call_absolute(jit, count, VM_REGISTER_EBX);
+    vm_call_absolute(jit, count, VM_REGISTER_R13);
 }
 
-static void* vm_jit_cpp_interop(VirtualMachine* vm, Jitter* jitter, int numParams, const char* name)
+static void vm_jit_store_registers(Jitter* jitter)
 {
-    unsigned char jit[512];
-    int count = 0;
+#ifndef WIN32
+    StackItem st;
+    auto& stk = jitter->stack;
+    for (int i = 0; i < stk.Size(); i++)
+    {
+	stk.Peek(i, &st);
+	if (st.store == ST_REG)
+	{
+            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, (i+1) * 8, st.reg);
+	}
+    }
+#endif
+}
 
-    vm_push_reg(jit, count, VM_REGISTER_EDI);
-    vm_push_reg(jit, count, VM_REGISTER_ESP);
-    vm_push_reg(jit, count, VM_REGISTER_EBX);
-    vm_sub_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, 32); // grow stack enough for callees
+static void vm_jit_restore_registers(Jitter* jitter)
+{
+#ifndef WIN32
+    StackItem st;
+    auto& stk = jitter->stack;
+    for (int i = 0; i < stk.Size(); i++)
+    {
+	stk.Peek(i, &st);
+	if (st.store == ST_REG)
+	{
+	    vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, st.reg, VM_REGISTER_ESP, (i+1) * 8);
+	}
+    }
+#endif
+}
 
+static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, const char* name)
+{
     // Calls are the in the form:
     // 
-    // EBX - CALLEE ADDR
-    // ECX - VM ADDR
-    // EDX - PARAMETER
-
-    // Store the first two parameters in: EDX and R12
-    vm_mov_reg_to_reg_x64(jit, count, VM_REGISTER_R12, VM_REGISTER_EDX);
-    vm_mov_reg_to_reg_x64(jit, count, VM_REGISTER_EDX, VM_REGISTER_ECX);
+    // R13 - CALLEE ADDR
+    // ARG1 - VM ADDR
+    // ARG2 - PARAMETER
+    
+    vm_jit_spill_register(jitter, VM_ARG1);
+    vm_jit_spill_register(jitter, VM_ARG2);
+    vm_jit_spill_register(jitter, VM_ARG3);
 
     if (numParams >= 1)
     {
-        // The first parameter is already within EDX
-
-        vm_jit_call_push_stub(jitter->stack, vm, jit, count, 0);
+       vm_jit_store_registers(jitter);
+       vm_jit_call_push_stub(jitter->stack, vm, jitter->jit, jitter->count);
+       vm_jit_restore_registers(jitter);
     }
     if (numParams >= 2)
     {
-        // The second parameter in within R12
-
-        vm_mov_reg_to_reg_x64(jit, count, VM_REGISTER_EDX, VM_REGISTER_R12);
-        vm_jit_call_push_stub(jitter->stack, vm, jit, count, 1);
+       vm_jit_store_registers(jitter);
+       vm_jit_call_push_stub(jitter->stack, vm, jitter->jit, jitter->count);
+       vm_jit_restore_registers(jitter);
     }
 
-    // Store the VM pointer in ECX.
+    vm_jit_store_registers(jitter);
+
+    // Store the VM pointer in ARG1.
     // We do this each time in case the register is cleared.
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_ECX, (long long)vm);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)vm);
 
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EDX, (long long)name);
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R8, numParams);
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EBX, (long long)vm_call_stub);
-    vm_call_absolute(jit, count, VM_REGISTER_EBX);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, (long long)name);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, numParams);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_R13, (long long)vm_call_stub);
+    vm_call_absolute(jitter->jit, jitter->count, VM_REGISTER_R13);
+    
+    vm_jit_restore_registers(jitter);
+    
+    jitter->allocator.Free(VM_ARG1);
+    jitter->allocator.Free(VM_ARG2);
+    jitter->allocator.Free(VM_ARG3);
 
-    vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, 32); // free stack
-
-    // Restore volatile registers
-    vm_pop_reg(jit, count, VM_REGISTER_EBX);
-    vm_pop_reg(jit, count, VM_REGISTER_ESP);
-    vm_pop_reg(jit, count, VM_REGISTER_EDI);
-    vm_return(jit, count);
-
-    void* jit_compiled = vm_allocate(count);
-    vm_initialize(jit_compiled, jit, count);
-    return jit_compiled;
-}
-
-static std::string vm_generate_function_signature(Jitter* jitter, int numParams)
-{
-    std::stringstream signature;
-    for (int i = 0; i < numParams; i++)
-    {
-        StackItem item;
-        jitter->stack.Peek(i, &item);
-        switch (item.type)
-        {
-        case TY_INT:
-            signature << "I";
-            break;
-        case TY_STRING:
-            signature << "S";
-            break;
-        }
-    }
-
-    return signature.str();
-}
-
-static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, int id)
-{
-    // Look up if the function is in the cache. Call that directly.
-    // Otherwise we need to compile the function:
-
-    std::string signature = vm_generate_function_signature(jitter, numParams);
-    std::stringstream key;
-    key << id << "_" << signature;
-
-    bool shouldPatch = false;
-    JIT_Method* method = reinterpret_cast<JIT_Method*>(jitter->_manager->_cache.SearchJITCache(key.str()));
-    char returnType = TY_VOID;
-
-    if (!method)
-    {
-        method = new JIT_Method();
-        method->_endTime = 0;
-        method->_id = id;
-        method->_runCount = 0;
-        method->_signature = signature;
-        method->_startTime = 0;
-        method->_size = 0;
-        method->_cacheKey = key.str();
-        method->_jumpPos = 0;
-
-        FunctionInfo* info;
-        if (FindFunction(vm, id, &info) == VM_OK)
-        {
-            // Generate a unique stub method for this method.
-            method->_jit_data = vm_jit_sun_stub(vm, jitter, method, numParams, info->name.c_str(), signature);
-            jitter->_manager->_cache.CacheJIT(jitter->_method->_cacheKey + "_" + key.str(), method);
-            shouldPatch = true;
-
-            // TODO: handle this properly
-            returnType = TY_INT;
-        }
-        else
-        {
-            method->_jit_data = vm_jit_cpp_interop(vm, jitter, numParams, info->name.c_str());
-            jitter->_manager->_cache.CacheJIT(key.str(), method);
-        }
-    }
-
-    // ======================================
-    // Now we generate a call to the compiled method
-    //
-    // x64 calling convention
-    // Pass in the initial parameters by registers:
-    // (leftmost) RCX, RDX, R8, R9, then passed on the stack
-    //
-
-    VirtualStack stack;
-
-    int registers[] = {
-        VM_REGISTER_ECX, VM_REGISTER_EDX, VM_REGISTER_R8, VM_REGISTER_R9
-    };
-    for (int i = 0; i < numParams; i++)
-    {
-        StackItem item = jitter->stack.Pop();
-        if (item.store == ST_REG)
-        {
-            if (item.reg != registers[i])
-            {
-                vm_jit_spill_register(jitter, registers[i]);
-
-                vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, registers[i], item.reg);
-
-                jitter->allocator.Free(item.reg);
-                jitter->allocator.Allocate(registers[i]);
-            }
-
-            stack.Push_Register(registers[i], item.type);
-        }
-        else if (item.store == ST_STACK)
-        {
-            vm_jit_spill_register(jitter, registers[i]);
-            vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, registers[i], item.reg, item.pos);
-
-            jitter->allocator.Allocate(registers[i]);
-            stack.Push_Register(registers[i], item.type);
-        }
-    }
-
-    const int reg = jitter->allocator.Allocate();
-
-    if (shouldPatch)
-    {
-        JIT_SunStub& stub = jitter->_method->_stubs.emplace_back();
-        stub._patch._reg = reg;
-        stub._patch._offset = jitter->count;
-        stub._patch._state = PATCH_INITIALIZED;
-        stub._stubMethod = method;
-    }
-
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, reg, (long long)method->_jit_data);
-    vm_call_absolute(jitter->jit, jitter->count, reg);
-    jitter->allocator.Free(reg);
-
-    for (int i = 0; i < numParams; i++)
-    {
-        StackItem item = stack.Pop();
-        jitter->allocator.Free(item.reg);
-    }
-
-    // ======================
-    // Handle return value
-    // ======================
-
-    if (returnType != TY_VOID)
-    {
-        // This register is probably nuked anyway?
-        vm_jit_spill_register(jitter, VM_REGISTER_EAX);
-
-        // Push return value
-        jitter->allocator.Allocate(VM_REGISTER_EAX);
-        jitter->stack.Push_Register(VM_REGISTER_EAX, returnType);
-    }
+    // TODO: handle return value; we simply need to check the
+    // return value is the type we are expecting to get back.
+    // Otherwise abort the trace.
 }
 
 static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
@@ -2558,20 +2250,25 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
     (*jitter->pc)++;
 
     const int id = vm_jit_read_int(jitter->program, jitter->pc);
+    
+    const char* name = FindFunctionName(vm, id);
+    assert(name);
 
-    vm_jit_call_x64(vm, jitter, numParams, id);
+    vm_jit_call_x64(vm, jitter, numParams, name);
 }
 
 static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
 {
     const int numParams = jitter->program[*jitter->pc];
     (*jitter->pc)++;
-    char* name = (char*)&jitter->program[*jitter->pc];
-    (*jitter->pc) += static_cast<unsigned int>(strlen(name)) + 1;
+    
+    const int id = vm_jit_read_int(jitter->program, jitter->pc);
+    
+    const char* name = FindFunctionName(vm, id);	    
+    assert(name);
 
-    abort();
     // First we do call_x64
-    //vm_jit_call_x64(vm, jitter, numParams, name);
+    vm_jit_call_x64(vm, jitter, numParams, name);
 
     // Then we make a call to 'vm_yield'.
     // Which will record the stack pointer and the instruction pointer.
@@ -2665,7 +2362,7 @@ static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock
         if (edge._true == block && edge._from->Jump() < 0)
         {
             // Backward jump
-            auto& jump = jitter->_method->_backwardJumps.emplace_back();
+            auto& jump = jitter->_trace->_backwardJumps.emplace_back();
             jump._type = edge._from->JumpType();
             jump._state = PATCH_INITIALIZED;
             jump._pos = jitter->count;
@@ -2741,62 +2438,95 @@ static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock
     }
 }
 
-static void vm_jit_generate(VirtualMachine* vm, Jitter* jitter)
+static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
 {
     // Store volatile registers
-
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EDI);
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EDX);
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EBX);
 
-    // We need to allocate the stack to fit the local variables
-    // before the space for the 'register homes' are allocated.
-    // 
-    // Parameters passed into the function
-    // should be stored on the caller's 'register homes' not
-    // on our stack frame.
-    //
 
-    const auto& signature = jitter->_method->_signature;
-
-    // Push the parameters onto the VirtualStack
-    const int registers[] = {
-        VM_REGISTER_ECX,
-        VM_REGISTER_EDX,
-        VM_REGISTER_R8,
-        VM_REGISTER_R9
-    };
-    for (int i = 0; i < signature.size(); i++)
-    {
-        switch (signature[i])
-        {
-        case 'I':
-            jitter->stack.Push_Register(registers[i], TY_INT);
-            break;
-        case 'S':
-            jitter->stack.Push_Register(registers[i], TY_STRING);
-            break;
-        }
-    }
-
-    const int stacksize = VM_ALIGN_16(int(jitter->info->locals.size()) * 8 /* Locals */ + 32 /* 4 register homes for callees */);
+    const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */ + 8 * 16/*TEMP space for 16 locals*/);
 
     vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize); // grow stack
 
-    // Inject logic to capture metric data
-
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EDX, (long long)&jitter->_method->_runCount);
-    vm_inc_memory_x64(jitter->jit, jitter->count, VM_REGISTER_EDX, 0);
-
-    BasicBlock* blk = jitter->fg.Head();
-    while (jitter->running && blk)
+    // TODO: store local variables
+    for (int i = 0; i < 16; i++)
     {
-        vm_jit_generate_block(vm, jitter, blk, stacksize);
-        blk = blk->Next();
+	jitter->locals[i].pos = jitter->stack.Local();
     }
+
+    while (jitter->running)
+    {
+        //std::cout << "INS " << *jitter->pc << " " << int(jitter->program[*jitter->pc]) << std::endl;
+        const int ins = jitter->program[(*(jitter->pc))++];
+
+        switch (ins)
+        {
+        case OP_POP:
+            vm_jit_pop(jitter);
+            break;
+        case OP_JUMP:
+            //vm_jit_jump(jitter);
+	    (*jitter->pc) += 3;
+            break;
+        case OP_CMP:
+            vm_jit_cmp(jitter);
+            break;
+        case OP_CALL:
+            vm_jit_call(vm, jitter); 
+            break;
+        case OP_YIELD:
+            vm_jit_yield(vm, jitter);
+            break;
+        case OP_PUSH:
+            vm_jit_push(jitter);
+            break;
+        case OP_PUSH_LOCAL:
+            vm_jit_push_local(jitter);
+            break;
+        case OP_UNARY_MINUS:
+            vm_jit_neg(jitter);
+            break;
+        case OP_ADD:
+            vm_jit_add(jitter);
+            break;
+        case OP_SUB:
+            vm_jit_sub(jitter);
+            break;
+        case OP_MUL:
+            vm_jit_mul(jitter);
+            break;
+        case OP_DIV:
+            vm_jit_div(jitter);
+            break;
+        case OP_INCREMENT:
+            vm_jit_inc(jitter);
+            break;
+        case OP_DECREMENT:
+            vm_jit_dec(jitter);
+            break;
+        case OP_DONE:
+            //vm_jit_epilog(jitter, stacksize);
+            //vm_return(jitter->jit, jitter->count);
+            jitter->running = false;
+            break;
+        case OP_RETURN:
+            //vm_jit_return(jitter, stacksize);
+            break;
+        case OP_POP_DISCARD:
+            vm_jit_pop_discard(jitter);
+            break;
+        default:
+            abort();
+        }
+    }
+
+    vm_jit_epilog(jitter, stacksize);
+    vm_return(jitter->jit, jitter->count);
 }
 
-void vm_jit_suspend(JIT_Manager* manager)
+static void vm_jit_suspend(JIT_Manager* manager)
 {
     unsigned char jit[1024];
     int count = 0;
@@ -2817,21 +2547,21 @@ void vm_jit_suspend(JIT_Manager* manager)
 
     // Calculate stack size
     // StackPtr - ESP
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R8, (long long)&manager->_co._stackPtr);
-    vm_mov_memory_to_reg_x64(jit, count, VM_REGISTER_R8, VM_REGISTER_R8, 0);
-    vm_sub_reg_to_reg_x64(jit, count, VM_REGISTER_R8, VM_REGISTER_ESP);
+    vm_mov_imm_to_reg_x64(jit, count, VM_ARG3, (long long)&manager->_co._stackPtr);
+    vm_mov_memory_to_reg_x64(jit, count, VM_ARG3, VM_ARG3, 0);
+    vm_sub_reg_to_reg_x64(jit, count, VM_ARG3, VM_REGISTER_ESP);
 
     // Store stack size - for resumption
     vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, (long long)&manager->_co._stackSize);
-    vm_mov_reg_to_memory_x64(jit, count, VM_REGISTER_EAX, 0, VM_REGISTER_R8);
+    vm_mov_reg_to_memory_x64(jit, count, VM_REGISTER_EAX, 0, VM_ARG3);
 
     // Generate a call to memcpy
-    // Dst (ECX = mem)
-    // Src (EDX = ESP)
-    // Size (R8 = size)
+    // Dst (ARG1 = mem)
+    // Src (ARG2 = ESP)
+    // Size (ARG3 = size)
 
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_ECX, (long long)mem);
-    vm_mov_reg_to_reg_x64(jit, count, VM_REGISTER_EDX, VM_REGISTER_ESP);
+    vm_mov_imm_to_reg_x64(jit, count, VM_ARG1, (long long)mem);
+    vm_mov_reg_to_reg_x64(jit, count, VM_ARG2, VM_REGISTER_ESP);
     vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, (long long)&std::memcpy);
     vm_call_absolute(jit, count, VM_REGISTER_EAX);
 
@@ -2853,18 +2583,18 @@ void vm_jit_suspend(JIT_Manager* manager)
 
     // Update the ESP to point to the bottom
 
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R8, (long long)&manager->_co._stackSize);
-    vm_sub_memory_to_reg_x64(jit, count, VM_REGISTER_ESP, VM_REGISTER_R8, 0);
+    vm_mov_imm_to_reg_x64(jit, count, VM_ARG3, (long long)&manager->_co._stackSize);
+    vm_sub_memory_to_reg_x64(jit, count, VM_REGISTER_ESP, VM_ARG3, 0);
     vm_sub_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, -8);     // make an adjustment (for some reason?)
 
     // Now we restore the stack
-    // Dst (ECX = VM_REGISTER_ESP)
-    // Src (EDX = mem)
-    // Size (R8 = size)
+    // Dst (ARG1 = VM_REGISTER_ESP)
+    // Src (ARG2 = mem)
+    // Size (ARG3 = size)
 
-    vm_mov_memory_to_reg_x64(jit, count, VM_REGISTER_R8, VM_REGISTER_R8, 0);
-    vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EDX, (long long)mem);
-    vm_mov_reg_to_reg_x64(jit, count, VM_REGISTER_ECX, VM_REGISTER_ESP);
+    vm_mov_memory_to_reg_x64(jit, count, VM_ARG3, VM_ARG3, 0);
+    vm_mov_imm_to_reg_x64(jit, count, VM_ARG2, (long long)mem);
+    vm_mov_reg_to_reg_x64(jit, count, VM_ARG1, VM_REGISTER_ESP);
     vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_EAX, (long long)&std::memcpy);
     vm_call_absolute(jit, count, VM_REGISTER_EAX);
 
@@ -2884,7 +2614,7 @@ void vm_jit_suspend(JIT_Manager* manager)
     manager->_co._vm_resume = (unsigned char*)manager->_co._vm_suspend + resume;
 }
 
-void vm_jit_yielded(JIT_Manager* manager)
+static void vm_jit_yielded(JIT_Manager* manager)
 {
     unsigned char jit[1024];
     int count = 0;
@@ -2923,7 +2653,7 @@ void vm_jit_yielded(JIT_Manager* manager)
     manager->_co._yield_resume = (unsigned char*)manager->_co._vm_yielded + resumePosition;
 }
 
-void vm_jit_entry_stub(JIT_Manager* manager)
+static void vm_jit_entry_stub(JIT_Manager* manager)
 {
     unsigned char jit[1024];
     int count = 0;
@@ -2945,7 +2675,7 @@ void vm_jit_entry_stub(JIT_Manager* manager)
 
     // Call the start method
     
-    vm_call_absolute(jit, count, VM_REGISTER_ECX);
+    vm_call_absolute(jit, count, VM_ARG1);
 
     // Return value - VM_OK
 
@@ -2965,62 +2695,18 @@ void vm_jit_entry_stub(JIT_Manager* manager)
     vm_initialize(manager->_co._vm_stub, jit, count);
 }
 
-static bool CanJITFunction(VirtualMachine* vm, unsigned int& pc, unsigned char* program)
-{
-    pc += 5;
-    const int id = vm_jit_read_int(program, &pc);
-    //char* str = reinterpret_cast<char*>(&program[pc]);
-    //pc += static_cast<unsigned int>(strlen(str)) + 1;
-
-    FunctionInfo* func;
-    const int status = FindFunction(vm, id, &func);
-
-    if (status == VM_OK)
-    {
-        return func->counter >= 1;
-    }
-    return false;
-}
-
-static bool CanJIT(VirtualMachine* vm, unsigned char* program, FunctionInfo* info)
-{
-    bool ok = info->counter > 0;
-    
-    if (ok)
-    {
-        unsigned int pc = info->pc;
-        const unsigned int end = info->pc + info->size;
-        for (unsigned int i = pc; i < end; i++)
-        {
-            switch (program[pc])
-            {
-            case OP_CALL:
-                if (!CanJITFunction(vm, pc, program))
-                {
-                    return false;
-                }
-                break;
-            default:
-                ConsumeInstruction(program, pc);
-                break;
-            }
-        }
-    }
-
-    return ok;
-}
-
 //========================
 
 void SunScript::JIT_Setup(Jit* jit)
 {
     jit->jit_initialize = SunScript::JIT_Initialize;
-    jit->jit_compile = SunScript::JIT_Compile;
-    jit->jit_execute = SunScript::JIT_Execute;
+    //jit->jit_compile = SunScript::JIT_Compile;
+    jit->jit_compile_trace = SunScript::JIT_CompileTrace;
+    jit->jit_execute = SunScript::JIT_ExecuteTrace;
     jit->jit_resume = SunScript::JIT_Resume;
-    jit->jit_search_cache = SunScript::JIT_SearchCache;
-    jit->jit_cache = SunScript::JIT_CacheData;
-    jit->jit_stats = SunScript::JIT_Stats;
+    //jit->jit_search_cache = SunScript::JIT_SearchCache;
+    //jit->jit_cache = SunScript::JIT_CacheData;
+    //jit->jit_stats = SunScript::JIT_Stats;
     jit->jit_shutdown = SunScript::JIT_Shutdown;
 }
 
@@ -3033,67 +2719,14 @@ void* SunScript::JIT_Initialize()
     return manager;
 }
 
-void* SunScript::JIT_Compile(void* instance, VirtualMachine* vm, unsigned char* program, FunctionInfo* info, const std::string& signature)
-{
-    // Return nullptr is there is no type data
-    // e.g. deoptimize
-    if (!CanJIT(vm, program, info))
-    {
-        return nullptr;
-    }
-
-    unsigned char jit[1024];
-    unsigned int pc = info->pc;
-
-    std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
-    jitter->program = program;
-    jitter->pc = &pc;
-    jitter->jit = jit;
-    jitter->info = info;
-    jitter->locals.reserve(info->locals.size() + info->parameters.size());
-    jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
-    jitter->fg.Init(program, pc, info->size);
-
-    jitter->_method = new JIT_Method();
-    jitter->_method->_id = 0;// info->;
-    jitter->_method->_signature = signature;
-    jitter->_method->_runCount = 0;
-    jitter->_method->_cacheKey = info->name + "_" + signature;
-    jitter->_method->_jumpPos = 0;
-
-    std::chrono::steady_clock clock;
-
-    //==============================
-    // Run the JIT compilation
-    //==============================
-    jitter->_method->_startTime = clock.now().time_since_epoch().count();
-
-    vm_jit_generate(vm, jitter.get());
-    jitter->_method->_jit_data = vm_allocate(jitter->count);
-    vm_initialize(jitter->_method->_jit_data, jitter->jit, jitter->count);
-
-    for (auto& stub : jitter->_method->_stubs)
-    {
-        stub._patch._data = jitter->_method->_jit_data;
-        stub._patch._size = jitter->count;
-    }
-    
-    jitter->_method->_size = jitter->count;
-
-    //===============================
-    jitter->_method->_endTime = clock.now().time_since_epoch().count();
-
-    return jitter->_method;
-}
-
-int SunScript::JIT_Execute(void* instance, void* data)
+int SunScript::JIT_ExecuteTrace(void* instance, void* data)
 {
     JIT_Manager* mm = reinterpret_cast<JIT_Manager*>(instance);
-    JIT_Method* method = reinterpret_cast<JIT_Method*>(data);
+    JIT_Trace* trace = reinterpret_cast<JIT_Trace*>(data);
 
     //vm_execute(method->_jit_data);
     int(*fn)(void*) = (int(*)(void*))((unsigned char*)mm->_co._vm_stub);
-    return fn(method->_jit_data);
+    return fn(trace->_jit_data);
 }
 
 int SunScript::JIT_Resume(void* instance)
@@ -3105,26 +2738,14 @@ int SunScript::JIT_Resume(void* instance)
     return fn(mm->_co._vm_resume);
 }
 
-void* SunScript::JIT_SearchCache(void* instance, const std::string& key)
-{
-    JIT_Manager* mm = reinterpret_cast<JIT_Manager*>(instance);
-    return mm->_cache.SearchJITCache(key);
-}
-
-int SunScript::JIT_CacheData(void* instance, const std::string& key, void* data)
-{
-    JIT_Manager* mm = reinterpret_cast<JIT_Manager*>(instance);
-    return mm->_cache.CacheJIT(key, reinterpret_cast<JIT_Method*>(data));
-}
-
 void SunScript::JIT_Free(void* data)
 {
-    JIT_Method* method = reinterpret_cast<JIT_Method*>(data);
+    JIT_Trace* trace = reinterpret_cast<JIT_Trace*>(data);
 
-    vm_free(method->_jit_data, method->_size);
+    vm_free(trace->_jit_data, trace->_size);
 }
 
-static std::string JIT_Method_Stats(JIT_Method* method)
+/*static std::string JIT_Method_Stats(JIT_Method* method)
 {
     int numPatchesApplied = 0;
     for (auto& stub : method->_stubs)
@@ -3167,7 +2788,7 @@ std::string SunScript::JIT_Stats(void* data)
     }
 
     return ss.str();
-}
+}*/
 
 void SunScript::JIT_Shutdown(void* instance)
 {
@@ -3180,68 +2801,57 @@ void SunScript::JIT_Shutdown(void* instance)
 //===========================
 
 
-void* SunScript::JIT_CreateTrace(void* instance)
+void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size)
 {
-    JIT_Manager* mm = reinterpret_cast<JIT_Manager*>(instance);
-    return new JIT_TraceData();
-}
+    unsigned char* jit = new unsigned char [1024 * 2];
+    unsigned int pc = 0;
 
-void SunScript::JIT_Trace(void* trace, unsigned char* pc, unsigned int count)
-{
-    JIT_TraceData* traceData = reinterpret_cast<JIT_TraceData*>(trace);
-    for (unsigned int i = 0; i < count; i++)
-    {
-        traceData->_trace.push_back(*pc);
-        (*pc)++;
-    }
-}
-
-void SunScript::JIT_FinalizeTrace(void* instance, VirtualMachine* vm, void* trace)
-{
-    JIT_TraceData* traceData = reinterpret_cast<JIT_TraceData*>(trace);
-
-    unsigned char jit[1024];
-    unsigned int pc = 0;// info->pc;
+    // =================================
+    //for (int i = 0; i < size; i++)
+    //{
+	//std::cout << int(trace[i]) << " ";
+    //}
+    //std::cout << std::endl;
+    //===============================
 
     std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
-    jitter->program = traceData->_trace.data();
+    jitter->program = trace;
     jitter->pc = &pc;
     jitter->jit = jit;
     jitter->info = nullptr; //info;
-    //jitter->locals.reserve(info->locals.size() + info->parameters.size());
+    jitter->locals.resize(32/*info->locals.size() + info->parameters.size()*/);
     jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
-    jitter->fg.Init(jitter->program, pc, static_cast<unsigned int>(traceData->_trace.size()));
+    //jitter->fg.Init(jitter->program, pc, size);
 
-    jitter->_method = new JIT_Method();
-    jitter->_method->_id = 0; //info->name;
-    jitter->_method->_signature = ""; //signature;
-    jitter->_method->_runCount = 0;
-    jitter->_method->_cacheKey = "";// info->name + "_" + signature;
-    jitter->_method->_jumpPos = 0;
+    jitter->_trace = new JIT_Trace();
+    jitter->_trace->_id = 0; //info->name; 
+    jitter->_trace->_runCount = 0;
+    jitter->_trace->_jumpPos = 0;
 
     std::chrono::steady_clock clock;
 
     //==============================
     // Run the JIT compilation
     //==============================
-    jitter->_method->_startTime = clock.now().time_since_epoch().count();
+    jitter->_trace->_startTime = clock.now().time_since_epoch().count();
 
-    vm_jit_generate(vm, jitter.get());
-    jitter->_method->_jit_data = vm_allocate(jitter->count);
-    vm_initialize(jitter->_method->_jit_data, jitter->jit, jitter->count);
+    vm_jit_generate_trace(vm, jitter.get());
+    jitter->_trace->_jit_data = vm_allocate(jitter->count);
+    vm_initialize(jitter->_trace->_jit_data, jitter->jit, jitter->count);
 
-    for (auto& stub : jitter->_method->_stubs)
+    /*for (auto& stub : jitter->_method->_stubs)
     {
         stub._patch._data = jitter->_method->_jit_data;
         stub._patch._size = jitter->count;
-    }
+    }*/
 
-    jitter->_method->_size = jitter->count;
+    jitter->_trace->_size = jitter->count;
 
     //===============================
-    jitter->_method->_endTime = clock.now().time_since_epoch().count();
+    jitter->_trace->_endTime = clock.now().time_since_epoch().count();
+    delete[] jit;
 
-    //return jitter->_method;
+    return jitter->_trace;
 }
 
 //===========================
