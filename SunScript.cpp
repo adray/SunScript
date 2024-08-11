@@ -33,7 +33,7 @@ namespace SunScript
         else if (_pos + totalSize >= _totalSize)
         {
             // TODO: reallocate with larger size
-	    abort();
+        abort();
             return nullptr;
         }
 
@@ -174,7 +174,7 @@ namespace SunScript
         unsigned int programOffset;
         int* debugLines;
         bool running;
-	bool tracing;
+    bool tracing;
         int statusCode;
         int errorCode;
         int resumeCode;
@@ -196,12 +196,12 @@ namespace SunScript
         std::vector<Block> blocks;
         std::vector<Function> functions;
         std::vector<void*> locals;
-	std::vector<unsigned char> trace;
+    std::vector<unsigned char> trace;
         int (*handler)(VirtualMachine* vm);
         Jit jit;
         void* jit_instance;
         void* _userData;
-	void* jit_trace;
+    void* jit_trace;
     };
 
     struct ProgramBlock
@@ -483,7 +483,7 @@ inline static void Trace_Int(VirtualMachine* vm, int val)
 {
     if (vm->tracing)
     {
-	vm->trace.push_back(static_cast<unsigned char>(val & 0xFF));
+    vm->trace.push_back(static_cast<unsigned char>(val & 0xFF));
         vm->trace.push_back(static_cast<unsigned char>((val >> 8) & 0xFF));
         vm->trace.push_back(static_cast<unsigned char>((val >> 16) & 0xFF));
         vm->trace.push_back(static_cast<unsigned char>((val >> 24) & 0xFF));
@@ -494,10 +494,10 @@ inline static void Trace_String(VirtualMachine* vm, const char* str)
 {
     if (vm->tracing)
     {
-	while (str != 0) { 
+    while (str != 0) { 
             vm->trace.push_back(static_cast<unsigned char>(*str));
-	    str++;
-	}
+        str++;
+    }
     }
 }
 
@@ -509,8 +509,8 @@ static void Op_Set(VirtualMachine* vm)
 
     if (vm->tracing)
     {
-	vm->trace.push_back(OP_SET);
-	vm->trace.push_back(static_cast<unsigned char>(id & 0xFF));
+    vm->trace.push_back(OP_SET);
+    vm->trace.push_back(static_cast<unsigned char>(id & 0xFF));
     }
 
     switch (type)
@@ -537,7 +537,7 @@ static void Op_Set(VirtualMachine* vm)
         char* data = reinterpret_cast<char*>(vm->mm.New(sizeof(int), TY_INT));
         std::memcpy(data, str, strlen(str) + 1);
         vm->stack.push(data);
-	Trace_String(vm, str);
+    Trace_String(vm, str);
     }
     break;
     default:
@@ -553,8 +553,8 @@ static void Op_Push_Local(VirtualMachine* vm)
     
     if (vm->tracing)
     {
-	vm->trace.push_back(OP_PUSH_LOCAL);
-	vm->trace.push_back(static_cast<unsigned char>(id & 0xFF)); 
+    vm->trace.push_back(OP_PUSH_LOCAL);
+    vm->trace.push_back(static_cast<unsigned char>(id & 0xFF)); 
     }
     
     if (vm->statusCode == VM_OK)
@@ -577,25 +577,25 @@ static void Op_Push(VirtualMachine* vm)
     
     if (vm->tracing)
     {
-	vm->trace.push_back(OP_PUSH);
-	vm->trace.push_back(type);
+    vm->trace.push_back(OP_PUSH);
+    vm->trace.push_back(type);
     }
 
     switch (type)
     {
     case TY_INT:
-	{
-	    const int val = Read_Int(vm->program, &vm->programCounter);
+    {
+        const int val = Read_Int(vm->program, &vm->programCounter);
             Push_Int(vm, val);
-	    Trace_Int(vm, val);
-	}
+        Trace_Int(vm, val);
+    }
         break;
     case TY_STRING:
-	{
-	     const char* str = Read_String(vm->program, &vm->programCounter);
+    {
+         const char* str = Read_String(vm->program, &vm->programCounter);
              Push_String(vm, str);
-	     Trace_String(vm, str);
-	}
+         Trace_String(vm, str);
+    }
         break;
     }
 }
@@ -659,9 +659,9 @@ static void Op_Call(VirtualMachine* vm)
     
     if (vm->tracing)
     {
-	vm->trace.push_back(OP_CALL);
-	vm->trace.push_back(numArgs);
-	Trace_Int(vm, id);
+    vm->trace.push_back(OP_CALL);
+    vm->trace.push_back(numArgs);
+    Trace_Int(vm, id);
     }
 
     if (func.blk != -1)
@@ -712,14 +712,14 @@ static void Op_Yield(VirtualMachine* vm)
         // parameters can be accessed via GetParamInt() etc
         const int id = Read_Int(vm->program, &vm->programCounter);
 
-	if (vm->tracing)
-	{
-	    vm->trace.push_back(OP_YIELD);
-	    vm->trace.push_back(numArgs);
-	    Trace_Int(vm, id);
-	}
+    if (vm->tracing)
+    {
+        vm->trace.push_back(OP_YIELD);
+        vm->trace.push_back(numArgs);
+        Trace_Int(vm, id);
+    }
 
-	vm->callName = vm->functions[id].name;
+    vm->callName = vm->functions[id].name;
         vm->callNumArgs = numArgs;
 
         if (vm->handler(vm) == VM_ERROR)
@@ -770,7 +770,7 @@ static void Op_Pop(VirtualMachine* vm)
     if (vm->tracing)
     {
         vm->trace.push_back(OP_POP);
-	vm->trace.push_back(static_cast<unsigned char>(id));
+    vm->trace.push_back(static_cast<unsigned char>(id));
     }
 
     if (!vm->stack.empty())
@@ -1106,10 +1106,10 @@ static void Op_Jump(VirtualMachine* vm)
     
     if (vm->tracing)
     {
-	vm->trace.push_back(OP_JUMP);
-	vm->trace.push_back(type);
-	vm->trace.push_back(static_cast<unsigned char>(offset & 0xFF));
-	vm->trace.push_back(static_cast<unsigned char>((offset >> 8) & 0xFF));
+    vm->trace.push_back(OP_JUMP);
+    vm->trace.push_back(type);
+    vm->trace.push_back(static_cast<unsigned char>(offset & 0xFF));
+    vm->trace.push_back(static_cast<unsigned char>((offset >> 8) & 0xFF));
     }
 
     switch (type)
@@ -1335,7 +1335,7 @@ static int ResumeScript2(VirtualMachine* vm)
             vm->debugLine = vm->debugLines[vm->programCounter - vm->programOffset];
         }
 
-	const unsigned char op = vm->program[vm->programCounter++];
+    const unsigned char op = vm->program[vm->programCounter++];
 
         switch (op)
         {
@@ -1355,7 +1355,7 @@ static int ResumeScript2(VirtualMachine* vm)
             Op_Call(vm);
             break;
         case OP_DONE:
-	    if (vm->tracing) { vm->trace.push_back(OP_DONE); }
+        if (vm->tracing) { vm->trace.push_back(OP_DONE); }
             if (vm->statusCode == VM_OK)
             {
                 vm->running = false;
@@ -1407,9 +1407,9 @@ static int ResumeScript2(VirtualMachine* vm)
 
     if (vm->statusCode == VM_OK && vm->tracing)
     {
-	// End tracing and JIT compile
+    // End tracing and JIT compile
         vm->tracing = false;
-	vm->jit_trace = vm->jit.jit_compile_trace(vm->jit_instance, vm, vm->trace.data(), int(vm->trace.size()));
+    vm->jit_trace = vm->jit.jit_compile_trace(vm->jit_instance, vm, vm->trace.data(), int(vm->trace.size()));
     }
 
     return vm->statusCode;
@@ -1507,7 +1507,7 @@ int SunScript::RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nan
     
     if (vm->jit_trace)
     {
-	return vm->jit.jit_execute(vm->jit_instance, vm->jit_trace);
+    return vm->jit.jit_execute(vm->jit_instance, vm->jit_trace);
     }
 
     // Convert timeout to nanoseconds (or whatever it may be specified in)
@@ -1519,9 +1519,9 @@ int SunScript::RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nan
 
     if (vm->main->counter == 100 && vm->jit_instance)
     {
-	// Run with trace
-	vm->tracing = true;
-	vm->trace.clear();
+    // Run with trace
+    vm->tracing = true;
+    vm->trace.clear();
     }
 
     return ResumeScript2(vm);
@@ -1531,7 +1531,7 @@ int SunScript::ResumeScript(VirtualMachine* vm)
 {
     if (vm->jit_instance && vm->jit_trace)
     {
-	const int status = vm->jit.jit_resume(vm->jit_instance);
+    const int status = vm->jit.jit_resume(vm->jit_instance);
         return status;
     }
 
@@ -1629,10 +1629,10 @@ int SunScript::FindFunction(VirtualMachine* vm, int id, FunctionInfo** info)
     {
         const auto& func = vm->functions[id];
 
-	if (func.blk != -1)
-	{
+    if (func.blk != -1)
+    {
             *info = &vm->blocks[func.blk].info;
-	}
+    }
         return VM_OK;
     }
 
@@ -1643,7 +1643,7 @@ const char* SunScript::FindFunctionName(VirtualMachine* vm, int id)
 {
     if (id >= 0 && id < vm->functions.size())
     {
-	return vm->functions[id].name.c_str();
+    return vm->functions[id].name.c_str();
     }
 
     return nullptr;

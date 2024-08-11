@@ -1400,8 +1400,8 @@ void* vm_allocate(int size)
     void* data = mmap(nullptr, size, PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (data == MAP_FAILED)
     {
-	std::cout << errno << std::endl;
-	abort();
+    std::cout << errno << std::endl;
+    abort();
     }
     return data;
 }
@@ -1608,7 +1608,7 @@ static void vm_jit_pop(Jitter* jitter)
     }
     else
     {
-	jitter->SetError();
+    jitter->SetError();
     }
 }
 
@@ -2141,11 +2141,11 @@ static void vm_jit_call_push_stub(VirtualStack& stack, VirtualMachine* vm, unsig
     StackItem item = stack.Pop();
     if (item.store == ST_REG)
     {
-	vm_mov_reg_to_reg_x64(jit, count, VM_ARG2, item.reg);
+    vm_mov_reg_to_reg_x64(jit, count, VM_ARG2, item.reg);
     }
     else if (item.store == ST_STACK)
     {
-	vm_mov_memory_to_reg_x64(jit, count, VM_ARG2, item.reg, item.pos);
+    vm_mov_memory_to_reg_x64(jit, count, VM_ARG2, item.reg, item.pos);
     }
 
     if (item.type == TY_INT)
@@ -2172,11 +2172,11 @@ static void vm_jit_store_registers(Jitter* jitter)
     auto& stk = jitter->stack;
     for (int i = 0; i < stk.Size(); i++)
     {
-	stk.Peek(i, &st);
-	if (st.store == ST_REG)
-	{
+    stk.Peek(i, &st);
+    if (st.store == ST_REG)
+    {
             vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, (i+1) * 8, st.reg);
-	}
+    }
     }
 #endif
 }
@@ -2188,11 +2188,11 @@ static void vm_jit_restore_registers(Jitter* jitter)
     auto& stk = jitter->stack;
     for (int i = 0; i < stk.Size(); i++)
     {
-	stk.Peek(i, &st);
-	if (st.store == ST_REG)
-	{
-	    vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, st.reg, VM_REGISTER_ESP, (i+1) * 8);
-	}
+    stk.Peek(i, &st);
+    if (st.store == ST_REG)
+    {
+        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, st.reg, VM_REGISTER_ESP, (i+1) * 8);
+    }
     }
 #endif
 }
@@ -2264,7 +2264,7 @@ static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
     
     const int id = vm_jit_read_int(jitter->program, jitter->pc);
     
-    const char* name = FindFunctionName(vm, id);	    
+    const char* name = FindFunctionName(vm, id);        
     assert(name);
 
     // First we do call_x64
@@ -2453,7 +2453,7 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
     // TODO: store local variables
     for (int i = 0; i < 16; i++)
     {
-	jitter->locals[i].pos = jitter->stack.Local();
+        jitter->locals[i].pos = jitter->stack.Local();
     }
 
     while (jitter->running)
@@ -2468,7 +2468,7 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
             break;
         case OP_JUMP:
             //vm_jit_jump(jitter);
-	    (*jitter->pc) += 3;
+            (*jitter->pc) += 3;
             break;
         case OP_CMP:
             vm_jit_cmp(jitter);
@@ -2809,7 +2809,7 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     // =================================
     //for (int i = 0; i < size; i++)
     //{
-	//std::cout << int(trace[i]) << " ";
+    //std::cout << int(trace[i]) << " ";
     //}
     //std::cout << std::endl;
     //===============================

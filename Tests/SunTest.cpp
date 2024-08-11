@@ -120,7 +120,7 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     const int runCount = 10000;
     if (program)
     {
-	LoadProgram(vm, program);
+        LoadProgram(vm, program);
         for (int i = 0; i < runCount; i++)
         {
             int errorCode = RunScript(vm);
