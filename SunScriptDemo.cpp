@@ -210,14 +210,14 @@ static void RunDemoScript(const std::string& filename, const std::string& str, b
                 SunScript::SetJIT(vm, &jit);
             }
 
-        int status = LoadProgram(vm, programData, debugData);
+            int status = LoadProgram(vm, programData, debugData);
             if (status == VM_ERROR)
-        {
-            std::cout << "Error load demo script." << std::endl;
-        }
+            {
+                std::cout << "Error load demo script." << std::endl;
+            }
             else if (status == VM_OK)
-        {
-            status = SunScript::RunScript(vm);
+            {
+                status = SunScript::RunScript(vm);
                 if (status == VM_ERROR)
                 {
                     std::cout << "Error running demo script." << std::endl;
@@ -232,7 +232,7 @@ static void RunDemoScript(const std::string& filename, const std::string& str, b
                 {
                     std::cout << SunScript::JITStats(vm) << std::endl;
                 }
-        }
+            }
 
             ShutdownVirtualMachine(vm);
         }
