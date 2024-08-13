@@ -33,7 +33,7 @@ namespace SunScript
         else if (_pos + totalSize >= _totalSize)
         {
             // TODO: reallocate with larger size
-        abort();
+            abort();
             return nullptr;
         }
 
@@ -839,7 +839,7 @@ static void Sub_Int(VirtualMachine* vm, int* v1, void* v2)
 
     if (type == TY_INT)
     {
-        result -= *reinterpret_cast<int*>(v2);
+        result = *reinterpret_cast<int*>(v2) - result;
     }
     else
     {
@@ -881,7 +881,7 @@ static void Div_Int(VirtualMachine* vm, int* v1, void* v2)
 
     if (type == TY_INT)
     {
-        result /= *reinterpret_cast<int*>(v2);
+        result = *reinterpret_cast<int*>(v2) / result;
     }
     else
     {
@@ -1193,11 +1193,11 @@ static void Op_Compare(VirtualMachine* vm)
 
     if (vm->mm.GetType(item1) == TY_INT && vm->mm.GetType(item2) == TY_INT)
     {
-        vm->comparer = *reinterpret_cast<int*>(item1) - *reinterpret_cast<int*>(item2);
+        vm->comparer = *reinterpret_cast<int*>(item2) - *reinterpret_cast<int*>(item1);
     }
     else if (vm->mm.GetType(item1) == TY_STRING && vm->mm.GetType(item2) == TY_STRING)
     {
-        vm->comparer = strcmp(reinterpret_cast<char*>(item1), reinterpret_cast<char*>(item2));
+        vm->comparer = strcmp(reinterpret_cast<char*>(item2), reinterpret_cast<char*>(item1));
     }
     else
     {
@@ -1335,7 +1335,7 @@ static int ResumeScript2(VirtualMachine* vm)
             vm->debugLine = vm->debugLines[vm->programCounter - vm->programOffset];
         }
 
-    const unsigned char op = vm->program[vm->programCounter++];
+        const unsigned char op = vm->program[vm->programCounter++];
 
         switch (op)
         {
@@ -1355,7 +1355,7 @@ static int ResumeScript2(VirtualMachine* vm)
             Op_Call(vm);
             break;
         case OP_DONE:
-        if (vm->tracing) { vm->trace.push_back(OP_DONE); }
+            if (vm->tracing) { vm->trace.push_back(OP_DONE); }
             if (vm->statusCode == VM_OK)
             {
                 vm->running = false;
@@ -1407,9 +1407,9 @@ static int ResumeScript2(VirtualMachine* vm)
 
     if (vm->statusCode == VM_OK && vm->tracing)
     {
-    // End tracing and JIT compile
+        // End tracing and JIT compile
         vm->tracing = false;
-    vm->jit_trace = vm->jit.jit_compile_trace(vm->jit_instance, vm, vm->trace.data(), int(vm->trace.size()));
+        vm->jit_trace = vm->jit.jit_compile_trace(vm->jit_instance, vm, vm->trace.data(), int(vm->trace.size()));
     }
 
     return vm->statusCode;

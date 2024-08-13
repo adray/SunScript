@@ -92,8 +92,17 @@ static int Handler(VirtualMachine* vm)
             return VM_OK;
         }
     }
-
+    
     return VM_ERROR;
+}
+
+static void DumpStack(Callstack* s)
+{
+    std::cout << s->functionName << " " << s->programCounter << " Line: " << s->debugLine << std::endl;
+    if (s->next)
+    {
+        DumpStack(s->next);
+    }
 }
 
 static int RunTest(SunTestSuite* suite, SunTest* test)
@@ -133,6 +142,10 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
             {
                 test->_failureMessage = "RunScript returned VM_ERROR.";
                 test->_failed = true;
+
+                Callstack* s = GetCallStack(vm);
+                DumpStack(s);
+                DestroyCallstack(s);
                 break;
             }
         }

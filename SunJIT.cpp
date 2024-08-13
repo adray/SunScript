@@ -2006,9 +2006,9 @@ static void vm_jit_div(Jitter* jitter)
                 i1 = jitter->stack.Pop();
                 i2 = jitter->stack.Pop();
 
-                vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, i1.reg);
+                vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, i2.reg);
                 vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EDX, 0);
-                vm_div_reg_x64(jitter->jit, jitter->count, i2.reg);
+                vm_div_reg_x64(jitter->jit, jitter->count, i1.reg);
 
                 jitter->allocator.Free(VM_REGISTER_EDX);
                 jitter->allocator.Free(VM_REGISTER_EAX);

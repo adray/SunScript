@@ -903,14 +903,14 @@ void Parser::EmitFlowGraph(FlowGraph& graph, ProgramBlock* program)
 
 void Parser::EmitExpr(Expr* expr)
 {
-    if (expr->Right())
-    {
-        EmitExpr(expr->Right());
-    }
-
     if (expr->Left())
     {
         EmitExpr(expr->Left());
+    }
+
+    if (expr->Right())
+    {
+        EmitExpr(expr->Right());
     }
 
     auto& frame = _frames.top();
