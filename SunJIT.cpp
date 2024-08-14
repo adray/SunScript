@@ -1097,10 +1097,23 @@ public:
         std::memset(registers, 0, sizeof(registers));
 
         // Reserved registers
+
         registers[VM_REGISTER_ESP] = true;
         registers[VM_REGISTER_EBP] = true;
+        registers[VM_REGISTER_EAX] = true;
+
+#ifdef WIN32
         //registers[VM_REGISTER_EDI] = true;
         //registers[VM_REGISTER_ESI] = true;
+
+        registers[VM_REGISTER_R10] = true;
+        registers[VM_REGISTER_R11] = true;
+
+        registers[VM_ARG1] = true;
+        registers[VM_ARG2] = true;
+        registers[VM_ARG3] = true;
+        registers[VM_ARG4] = true;
+#endif
     }
 
     int Allocate(int reg)
@@ -1339,7 +1352,8 @@ public:
         error(false),
         _trace(nullptr),
         argsProcessed(0),
-        _manager(nullptr)
+        _manager(nullptr),
+        info(nullptr)
     {
     }
 
@@ -1400,8 +1414,8 @@ void* vm_allocate(int size)
     void* data = mmap(nullptr, size, PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (data == MAP_FAILED)
     {
-    std::cout << errno << std::endl;
-    abort();
+        std::cout << errno << std::endl;
+        abort();
     }
     return data;
 }
@@ -1608,7 +1622,7 @@ static void vm_jit_pop(Jitter* jitter)
     }
     else
     {
-    jitter->SetError();
+        jitter->SetError();
     }
 }
 
@@ -2242,6 +2256,8 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
     // TODO: handle return value; we simply need to check the
     // return value is the type we are expecting to get back.
     // Otherwise abort the trace.
+
+    jitter->stack.Push_Register(VM_REGISTER_EAX, TY_INT);
 }
 
 static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
@@ -2347,11 +2363,12 @@ static void vm_jit_pop_discard(Jitter* jitter)
 {
     if (jitter->stack.Size() > 0)
     {
-        StackItem i = jitter->stack.Pop();
+        /*StackItem i = jitter->stack.Pop();
         if (i.store == ST_REG)
         {
             jitter->allocator.Free(i.reg);
-        }
+        }*/
+        jitter->stack.Pop();
     }
 }
 
@@ -2446,7 +2463,7 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EBX);
 
 
-    const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */ + 8 * 16/*TEMP space for 16 locals*/);
+    const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */ + 8 * int(jitter->locals.size())/*space for locals*/);
 
     vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize); // grow stack
 
@@ -2803,7 +2820,7 @@ void SunScript::JIT_Shutdown(void* instance)
 
 void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size)
 {
-    unsigned char* jit = new unsigned char [1024 * 2];
+    unsigned char* jit = new unsigned char [1024 * 3];
     unsigned int pc = 0;
 
     // =================================
@@ -2819,7 +2836,7 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     jitter->pc = &pc;
     jitter->jit = jit;
     jitter->info = nullptr; //info;
-    jitter->locals.resize(32/*info->locals.size() + info->parameters.size()*/);
+    jitter->locals.resize(128/*info->locals.size() + info->parameters.size()*/);
     jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
     //jitter->fg.Init(jitter->program, pc, size);
 
