@@ -1,11 +1,11 @@
 #include "SunScript.h"
 #include <fstream>
 #include <stack>
-#include <vector>
 #include <unordered_map>
 #include <sstream>
 #include <iostream>
 #include <cstring>
+#include <format>
 #include <assert.h>
 
 using namespace SunScript;
@@ -201,7 +201,7 @@ namespace SunScript
         Jit jit;
         void* jit_instance;
         void* _userData;
-    void* jit_trace;
+        void* jit_trace;
     };
 
     struct ProgramBlock
