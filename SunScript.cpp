@@ -656,13 +656,6 @@ static void Op_Call(VirtualMachine* vm)
     auto& func = vm->functions[id];
     vm->callName = func.name;
     vm->callNumArgs = numArgs;
-    
-    if (vm->tracing)
-    {
-        vm->trace.push_back(OP_CALL);
-        vm->trace.push_back(numArgs);
-        Trace_Int(vm, id);
-    }
 
     if (func.blk != -1)
     {
@@ -687,6 +680,13 @@ static void Op_Call(VirtualMachine* vm)
     }
     else
     {
+        if (vm->tracing)
+        {
+            vm->trace.push_back(OP_CALL);
+            vm->trace.push_back(numArgs);
+            Trace_Int(vm, id);
+        }
+
         if (vm->handler)
         {
             // Calls out to a handler
@@ -1507,7 +1507,7 @@ int SunScript::RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nan
     
     if (vm->jit_trace)
     {
-    return vm->jit.jit_execute(vm->jit_instance, vm->jit_trace);
+        return vm->jit.jit_execute(vm->jit_instance, vm->jit_trace);
     }
 
     // Convert timeout to nanoseconds (or whatever it may be specified in)
@@ -1531,7 +1531,7 @@ int SunScript::ResumeScript(VirtualMachine* vm)
 {
     if (vm->jit_instance && vm->jit_trace)
     {
-    const int status = vm->jit.jit_resume(vm->jit_instance);
+        const int status = vm->jit.jit_resume(vm->jit_instance);
         return status;
     }
 

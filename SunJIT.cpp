@@ -35,8 +35,8 @@ enum vm_register
     VM_REGISTER_R11 = 0xb,
     VM_REGISTER_R12 = 0xc,
     VM_REGISTER_R13 = 0xd,
-    VM_REGISTER_R15 = 0xe,
-    VM_REGISTER_R16 = 0xf,
+    VM_REGISTER_R14 = 0xe,
+    VM_REGISTER_R15 = 0xf,
 
     VM_REGISTER_MAX = 0x10
 };
@@ -465,12 +465,22 @@ static void vm_return(unsigned char* program, int& count)
 
 static void vm_push_reg(unsigned char* program, int& count, char reg)
 {
-    program[count++] = 0x50 | (reg & 0x7);
+    if (reg >= VM_REGISTER_R8)
+    {
+        program[count++] = 0x48 | 0x1;
+    }
+
+    program[count++] = 0x50 | ((reg % 8) & 0x7);
 }
 
 static void vm_pop_reg(unsigned char* program, int& count, char reg)
 {
-    program[count++] = 0x58 | (reg & 0x7);
+    if (reg >= VM_REGISTER_R8)
+    {
+        program[count++] = 0x48 | 0x1;
+    }
+
+    program[count++] = 0x58 | ((reg % 8) & 0x7);
 }
 
 static void vm_mov_imm_to_reg(unsigned char* program, int& count, char dst, int imm)
@@ -1551,7 +1561,7 @@ static void vm_jit_call_internal_x64(Jitter* jitter, int numParams, void* addres
         jitter->allocator.Free(registers[i]);
     }
 
-    jitter->allocator.Free(VM_REGISTER_ECX);
+    //jitter->allocator.Free(VM_REGISTER_ECX);
 }
 
 static void vm_jit_spill_register(Jitter* jitter, int reg)
@@ -1654,7 +1664,7 @@ static void vm_jit_push(Jitter* jitter)
             const int reg = jitter->allocator.Allocate();
             if (reg != -1)
             {
-                vm_mov_imm_to_reg(jitter->jit, jitter->count, reg, value);
+                vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, reg, value);
                 jitter->stack.Push_Register(reg, TY_INT);
             }
             else
@@ -1913,29 +1923,29 @@ static void vm_jit_sub(Jitter* jitter)
         {
             if (i1.store == ST_REG && i2.store == ST_REG)
             {
-                vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, i1.reg, i2.reg);
+                vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, i2.reg, i1.reg);
                 jitter->allocator.Free(i2.reg);
                 jitter->stack.Push_Register(i1.reg, TY_INT);
             }
             else if (i1.store == ST_REG && i2.store == ST_STACK)
             {
-                vm_sub_memory_to_reg_x64(jitter->jit, jitter->count, i1.reg, i2.reg, i2.pos);
-                jitter->stack.Push_Register(i1.reg, TY_INT);
+                const int reg = jitter->allocator.Allocate();
+                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, i2.reg, i2.pos);
+                vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, reg, i1.reg);
+                jitter->stack.Push_Register(reg, TY_INT);
+                jitter->allocator.Free(i1.reg);
             }
             else if (i2.store == ST_REG && i1.store == ST_STACK)
             {
-                const int reg = jitter->allocator.Allocate();
-                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, i1.reg, i1.pos);
-                vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, reg, i2.reg);
-                jitter->stack.Push_Register(reg, TY_INT);
-                jitter->allocator.Free(i2.reg);
+                vm_sub_memory_to_reg_x64(jitter->jit, jitter->count, i2.reg, i1.reg, i1.pos);
+                jitter->stack.Push_Register(i2.reg, TY_INT);
             }
             else if (i1.store == ST_STACK && i2.store == ST_STACK)
             {
                 const int reg1 = jitter->allocator.Allocate();
 
-                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i1.reg, i1.pos);
-                vm_sub_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i2.reg, i2.pos);
+                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i2.reg, i2.pos);
+                vm_sub_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i1.reg, i1.pos);
 
                 jitter->stack.Push_Register(reg1, TY_INT);
             }
@@ -2249,9 +2259,9 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
     
     vm_jit_restore_registers(jitter);
     
-    jitter->allocator.Free(VM_ARG1);
-    jitter->allocator.Free(VM_ARG2);
-    jitter->allocator.Free(VM_ARG3);
+    //jitter->allocator.Free(VM_ARG1);
+    //jitter->allocator.Free(VM_ARG2);
+    //jitter->allocator.Free(VM_ARG3);
 
     // TODO: handle return value; we simply need to check the
     // return value is the type we are expecting to get back.
@@ -2300,8 +2310,12 @@ inline static void vm_jit_epilog(Jitter* jitter, const int stacksize)
 {
     vm_add_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize);
     vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EBX);
-    vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EDX);
+    vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_ESI);
     vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EDI);
+    vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_R15);
+    vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_R14);
+    vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_R13);
+    vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_R12);
 }
 
 static void vm_jit_box(Jitter* jitter)
@@ -2457,9 +2471,13 @@ static void vm_jit_generate_block(VirtualMachine* vm, Jitter* jitter, BasicBlock
 
 static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
 {
-    // Store volatile registers
+    // Store non-volatile registers
+    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_R12);
+    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_R13);
+    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_R14);
+    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_R15);
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EDI);
-    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EDX);
+    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_ESI);
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EBX);
 
 
@@ -2468,7 +2486,7 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
     vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize); // grow stack
 
     // TODO: store local variables
-    for (int i = 0; i < 16; i++)
+    for (int i = 0; i < int(jitter->locals.size()); i++)
     {
         jitter->locals[i].pos = jitter->stack.Local();
     }
@@ -2551,7 +2569,7 @@ static void vm_jit_suspend(JIT_Manager* manager)
     // Store volatile registers
 
     vm_push_reg(jit, count, VM_REGISTER_EDI);
-    vm_push_reg(jit, count, VM_REGISTER_EDX);
+    vm_push_reg(jit, count, VM_REGISTER_ESI);
     vm_push_reg(jit, count, VM_REGISTER_EBX);
 
 
@@ -2619,7 +2637,7 @@ static void vm_jit_suspend(JIT_Manager* manager)
 
     vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize);
     vm_pop_reg(jit, count, VM_REGISTER_EBX);
-    vm_pop_reg(jit, count, VM_REGISTER_EDX);
+    vm_pop_reg(jit, count, VM_REGISTER_ESI);
     vm_pop_reg(jit, count, VM_REGISTER_EDI);
     vm_return(jit, count);
 
@@ -2639,7 +2657,7 @@ static void vm_jit_yielded(JIT_Manager* manager)
     // Store volatile registers
 
     vm_push_reg(jit, count, VM_REGISTER_EDI);
-    vm_push_reg(jit, count, VM_REGISTER_EDX);
+    vm_push_reg(jit, count, VM_REGISTER_ESI);
     vm_push_reg(jit, count, VM_REGISTER_EBX);
 
     const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */);
@@ -2658,7 +2676,7 @@ static void vm_jit_yielded(JIT_Manager* manager)
 
     vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize);
     vm_pop_reg(jit, count, VM_REGISTER_EBX);
-    vm_pop_reg(jit, count, VM_REGISTER_EDX);
+    vm_pop_reg(jit, count, VM_REGISTER_ESI);
     vm_pop_reg(jit, count, VM_REGISTER_EDI);
     vm_return(jit, count);
 
@@ -2678,7 +2696,7 @@ static void vm_jit_entry_stub(JIT_Manager* manager)
     // Store volatile registers
 
     vm_push_reg(jit, count, VM_REGISTER_EDI);
-    vm_push_reg(jit, count, VM_REGISTER_EDX);
+    vm_push_reg(jit, count, VM_REGISTER_ESI);
     vm_push_reg(jit, count, VM_REGISTER_EBX);
 
     const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */);
@@ -2702,7 +2720,7 @@ static void vm_jit_entry_stub(JIT_Manager* manager)
 
     vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize);
     vm_pop_reg(jit, count, VM_REGISTER_EBX);
-    vm_pop_reg(jit, count, VM_REGISTER_EDX);
+    vm_pop_reg(jit, count, VM_REGISTER_ESI);
     vm_pop_reg(jit, count, VM_REGISTER_EDI);
     vm_return(jit, count);
 
