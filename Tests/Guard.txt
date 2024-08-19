@@ -1,0 +1,21 @@
+// Test we can recover from a guard failure.
+
+var p = Rnd(10);
+var q = 0;
+
+if (p < 5)
+{
+    q++;
+}
+
+function magic() {
+    var p = Rnd(10);
+    if (p < 5)
+    {
+        return "test";
+    }
+    return 10;
+}
+
+var x = magic();
+x = x + q;

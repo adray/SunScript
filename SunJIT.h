@@ -21,5 +21,6 @@ namespace SunScript
     //std::string JIT_Stats(void* data);
     void JIT_Shutdown(void* instance);
 
+    void JIT_DumpTrace(unsigned char* trace, unsigned int size);
     void* JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size);
 }

@@ -1943,12 +1943,15 @@ static SunScript::Program* CompileFile2(const std::string& filepath, std::string
     return program;
 }
 
-void SunScript::CompileFile(const std::string& filepath, unsigned char** programData)
+void SunScript::CompileFile(const std::string& filepath, unsigned char** programData, int* programSize)
 {
-    CompileFile(filepath, programData, nullptr, nullptr);
+    CompileFile(filepath, programData, nullptr, programSize, nullptr, nullptr);
 }
 
-void SunScript::CompileFile(const std::string& filepath, unsigned char** programData, unsigned char** debugData, std::string* error)
+void SunScript::CompileFile(const std::string& filepath,
+    unsigned char** programData, unsigned char** debugData,
+    int* programSize, int* debugSize,
+    std::string* error)
 {
     Program* program = CompileFile2(filepath, error);
 
@@ -1956,11 +1959,11 @@ void SunScript::CompileFile(const std::string& filepath, unsigned char** program
 
     if (program)
     {
-        GetProgram(program, programData);
+        *programSize = GetProgram(program, programData);
 
         if (debugData)
         {
-            GetDebugData(program, debugData);
+            *debugSize = GetDebugData(program, debugData);
         }
     }
 }

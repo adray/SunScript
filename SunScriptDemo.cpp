@@ -65,11 +65,11 @@ void SunScript::Demo1(int _42)
     SunScript::FlushBlocks(_program);
 
     unsigned char* programData;
-    GetProgram(_program, &programData);
+    const int programSize = GetProgram(_program, &programData);
 
     VirtualMachine* vm = CreateVirtualMachine();
     SetHandler(vm, Handler);
-    LoadProgram(vm, programData);
+    LoadProgram(vm, programData, programSize);
     RunScript(vm);
     
     delete[] programData;
@@ -106,11 +106,11 @@ void SunScript::Demo2()
     SunScript::FlushBlocks(_program);
 
     unsigned char* programData;
-    GetProgram(_program, &programData);
+    const int programSize = GetProgram(_program, &programData);
 
     VirtualMachine* vm = CreateVirtualMachine();
     SetHandler(vm, Handler);
-    LoadProgram(vm, programData);
+    LoadProgram(vm, programData, programSize);
     RunScript(vm);
 
     delete[] programData;
@@ -155,11 +155,11 @@ void SunScript::Demo3()
     SunScript::FlushBlocks(_program);
 
     unsigned char* programData;
-    GetProgram(_program, &programData);
+    const int programSize = GetProgram(_program, &programData);
 
     VirtualMachine* vm = CreateVirtualMachine();
     SetHandler(vm, Handler);
-    LoadProgram(vm, programData);
+    LoadProgram(vm, programData, programSize);
     RunScript(vm);
 
     delete[] programData;
@@ -193,8 +193,10 @@ static void RunDemoScript(const std::string& filename, const std::string& str, b
 
         unsigned char* programData;
         unsigned char* debugData;
+        int programSize;
+        int debugSize;
         std::string error;
-        SunScript::CompileFile(filename, &programData, &debugData, &error);
+        SunScript::CompileFile(filename, &programData, &debugData, &programSize, &debugSize, &error);
 
         if (programData && debugData)
         {
@@ -210,7 +212,7 @@ static void RunDemoScript(const std::string& filename, const std::string& str, b
                 SunScript::SetJIT(vm, &jit);
             }
 
-            int status = LoadProgram(vm, programData, debugData);
+            int status = LoadProgram(vm, programData, debugData, programSize);
             if (status == VM_ERROR)
             {
                 std::cout << "Error load demo script." << std::endl;

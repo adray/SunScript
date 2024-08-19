@@ -5,6 +5,8 @@
 
 namespace SunScript
 {
+    constexpr unsigned char MK_LOOPSTART = 1 << 7;
+
     constexpr unsigned char OP_PUSH = 0x0;
     constexpr unsigned char OP_POP = 0x1;
     constexpr unsigned char OP_CALL = 0x2;
@@ -29,6 +31,18 @@ namespace SunScript
     constexpr unsigned char OP_RETURN = 0x25;
     constexpr unsigned char OP_POP_DISCARD = 0x26;
 
+    constexpr unsigned char OP_LSPUSH = OP_PUSH | MK_LOOPSTART;
+    constexpr unsigned char OP_LSPOP = OP_POP | MK_LOOPSTART;
+    constexpr unsigned char OP_LSCALL = OP_CALL | MK_LOOPSTART;
+    constexpr unsigned char OP_LSYIELD = OP_YIELD | MK_LOOPSTART;
+    constexpr unsigned char OP_LSSET = OP_SET | MK_LOOPSTART;
+    constexpr unsigned char OP_LSPUSH_LOCAL = OP_PUSH_LOCAL | MK_LOOPSTART;
+    constexpr unsigned char OP_LSADD = OP_ADD | MK_LOOPSTART;
+    constexpr unsigned char OP_LSSUB = OP_SUB | MK_LOOPSTART;
+    constexpr unsigned char OP_LSMUL = OP_MUL | MK_LOOPSTART;
+    constexpr unsigned char OP_LSDIV = OP_DIV | MK_LOOPSTART;
+
+
     constexpr unsigned char TY_VOID = 0x0;
     constexpr unsigned char TY_INT = 0x1;
     constexpr unsigned char TY_STRING = 0x2;
@@ -42,6 +56,27 @@ namespace SunScript
     constexpr unsigned char JUMP_LE = 0x4;
     constexpr unsigned char JUMP_L = 0x5;
     constexpr unsigned char JUMP_G = 0x6;
+
+    constexpr unsigned char IR_LOAD_INT = 0x0;
+    constexpr unsigned char IR_LOAD_STRING = 0x1;
+    constexpr unsigned char IR_CALL = 0x20;
+    constexpr unsigned char IR_YIELD = 0x21;
+    constexpr unsigned char IR_INCREMENT_INT = 0x40;
+    constexpr unsigned char IR_DECREMENT_INT = 0x41;
+    constexpr unsigned char IR_ADD_INT = 0x42;
+    constexpr unsigned char IR_SUB_INT = 0x43;
+    constexpr unsigned char IR_MUL_INT = 0x44;
+    constexpr unsigned char IR_DIV_INT = 0x45;
+    constexpr unsigned char IR_UNARY_MINUS_INT = 0x46;
+    constexpr unsigned char IR_APP_INT_STRING = 0x47;
+    constexpr unsigned char IR_APP_STRING_INT = 0x48;
+    constexpr unsigned char IR_APP_STRING_STRING = 0x49;
+    constexpr unsigned char IR_GUARD = 0x50;
+    constexpr unsigned char IR_CMP_INT = 0x51;
+    constexpr unsigned char IR_CMP_STRING = 0x52;
+    constexpr unsigned char IR_LOOPBACK = 0x60;
+    constexpr unsigned char IR_LOOPSTART = 0x61;
+    constexpr unsigned char IR_LOOPEXIT = 0x62;
 
     struct VirtualMachine;
     struct Program;
@@ -90,6 +125,12 @@ namespace SunScript
         Callstack* next = nullptr;
     };
 
+    struct LoopStat
+    {
+        unsigned int pc;
+        int offset;
+    };
+
     struct ReturnStat
     {
         unsigned int pc;
@@ -104,15 +145,23 @@ namespace SunScript
         unsigned int falseCount;
     };
 
+    struct Statistics
+    {
+        unsigned int retCount;
+        unsigned int branchCount;
+        unsigned int loopCount;
+        ReturnStat retStats[8];
+        BranchStat branchStats[8];
+        LoopStat loopStats[8];
+    };
+
     struct FunctionInfo
     {
         unsigned int pc;
         unsigned int size;
         unsigned int counter;
-        unsigned int retCount;
-        unsigned int branchCount;
-        ReturnStat retStats[8];
-        BranchStat branchStats[8];
+        unsigned int depth;
+        Statistics stats;
         std::string name;
         std::vector<std::string> parameters;
         std::vector<std::string> locals;
@@ -199,10 +248,10 @@ namespace SunScript
     int LoadScript(const std::string& filepath, unsigned char** program);
 
     /* Loads a program into the virtual machine. */
-    int LoadProgram(VirtualMachine* vm, unsigned char* program);
+    int LoadProgram(VirtualMachine* vm, unsigned char* program, int programSize);
 
     /* Loads a program into the virtual machine. */
-    int LoadProgram(VirtualMachine* vm, unsigned char* program, unsigned char* debugData);
+    int LoadProgram(VirtualMachine* vm, unsigned char* program, unsigned char* debugData, int programSize);
 
     int RunScript(VirtualMachine* vm);
 

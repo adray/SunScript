@@ -167,6 +167,29 @@ namespace SunScript
         std::string name;
     };
 
+    struct TraceGuard
+    {
+        size_t tracePos;
+        unsigned int pc;
+    };
+
+    struct TraceLoop
+    {
+        int startRef;
+        int endRef;
+        unsigned int start;
+        unsigned int end;
+        std::vector<TraceGuard> guards;
+    };
+
+    struct Trace
+    {
+        std::vector<TraceLoop> loop;    // loops
+        std::vector<int> locals;        // local -> ref mapping
+        std::vector<int> refs;          // stack of refs
+        int ref;                        // current ref index
+    };
+
     struct VirtualMachine
     {
         unsigned char* program;
@@ -175,6 +198,7 @@ namespace SunScript
         int* debugLines;
         bool running;
         bool tracing;
+        bool tracingPaused;
         int statusCode;
         int errorCode;
         int resumeCode;
@@ -197,6 +221,7 @@ namespace SunScript
         std::vector<Function> functions;
         std::vector<void*> locals;
         std::vector<unsigned char> trace;
+        Trace tr;
         int (*handler)(VirtualMachine* vm);
         Jit jit;
         void* jit_instance;
@@ -232,13 +257,40 @@ namespace SunScript
 
 //===================
 
-inline static void RecordBranch(FunctionInfo* info, unsigned int pc, bool branchDirection)
+inline static void RecordLoop(FunctionInfo* info, unsigned int pc, int offset)
 {
-    const unsigned int numCount = sizeof(info->branchStats) / sizeof(BranchStat);
+    // TODO: record the loop somewhere it can be easily accessed via the pc
+    // In the tracing phase we only need to record the loop once? some more research is required.
+
+    const unsigned int numCount = sizeof(info->stats.loopStats) / sizeof(LoopStat);
     for (unsigned int i = 0; i < numCount; i++)
     {
-        auto& branch = info->branchStats[i];
-        if (i < info->branchCount)
+        auto& loop = info->stats.loopStats[i];
+        if (i < info->stats.loopCount)
+        {
+            if (loop.pc == pc)
+            {
+                loop.offset = offset;
+                break;
+            }
+        }
+        else
+        {
+            loop.pc = pc;
+            loop.offset = offset;
+            info->stats.loopCount++;
+            break;
+        }
+    }
+}
+
+inline static void RecordBranch(FunctionInfo* info, unsigned int pc, bool branchDirection)
+{
+    const unsigned int numCount = sizeof(info->stats.branchStats) / sizeof(BranchStat);
+    for (unsigned int i = 0; i < numCount; i++)
+    {
+        auto& branch = info->stats.branchStats[i];
+        if (i < info->stats.branchCount)
         {
             if (branch.pc == pc)
             {
@@ -258,7 +310,7 @@ inline static void RecordBranch(FunctionInfo* info, unsigned int pc, bool branch
             branch.pc = pc;
             branch.falseCount = branchDirection ? 0 : 1;
             branch.trueCount = branchDirection ? 1 : 0;
-            info->branchCount++;
+            info->stats.branchCount++;
             break;
         }
     }
@@ -266,11 +318,11 @@ inline static void RecordBranch(FunctionInfo* info, unsigned int pc, bool branch
 
 inline static void RecordReturn(FunctionInfo* info, unsigned int pc, char type)
 {
-    const unsigned int numCount = sizeof(info->retStats) / sizeof(ReturnStat);
+    const unsigned int numCount = sizeof(info->stats.retStats) / sizeof(ReturnStat);
     for (unsigned int i = 0; i < numCount; i++)
     {
-        auto& ret = info->retStats[i];
-        if (i < info->retCount)
+        auto& ret = info->stats.retStats[i];
+        if (i < info->stats.retCount)
         {
             if (ret.pc == pc &&
                 ret.type == type)
@@ -284,10 +336,254 @@ inline static void RecordReturn(FunctionInfo* info, unsigned int pc, char type)
             ret.pc = pc;
             ret.type = type;
             ret.count = 1;
-            info->retCount++;
+            info->stats.retCount++;
             break;
         }
     }
+}
+
+//============================
+// TRACING IR (SSA form)
+//============================
+
+inline static void Trace_Initialize(VirtualMachine* vm)
+{
+    vm->tr.ref = 0;
+    vm->tracing = true;
+    vm->trace.clear();
+    vm->tr.refs.clear();
+    vm->tr.locals.resize(vm->locals.size());
+}
+
+inline static void Trace_Int(VirtualMachine* vm, int val)
+{
+    vm->trace.push_back(static_cast<unsigned char>(val & 0xFF));
+    vm->trace.push_back(static_cast<unsigned char>((val >> 8) & 0xFF));
+    vm->trace.push_back(static_cast<unsigned char>((val >> 16) & 0xFF));
+    vm->trace.push_back(static_cast<unsigned char>((val >> 24) & 0xFF));
+}
+
+inline static void Trace_String(VirtualMachine* vm, const char* str)
+{
+    while (*str != 0) {
+        vm->trace.push_back(static_cast<unsigned char>(*str));
+        str++;
+    }
+    vm->trace.push_back(0);
+}
+
+inline static void Trace_LoadC_Int(VirtualMachine* vm, int val)
+{
+    vm->trace.push_back(IR_LOAD_INT);
+    Trace_Int(vm, val);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_LoadC_String(VirtualMachine* vm, const char* str)
+{
+    vm->trace.push_back(IR_LOAD_STRING);
+    Trace_String(vm, str);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_ReturnValue(VirtualMachine* vm)
+{
+    // Push the ref which has pushed onto the stack by the function call.
+    vm->tr.refs.push_back(vm->tr.ref - 1);
+}
+
+inline static void Trace_Push_Local(VirtualMachine* vm, int local)
+{
+    // Push the ref currently associated with the local to the stack.
+    vm->tr.refs.push_back(vm->tr.locals[local]);
+}
+
+inline static void Trace_Pop(VirtualMachine* vm, int local)
+{
+    // Update the local to point to the ref on the top of the stack.
+    vm->tr.locals[local] = vm->tr.refs[vm->tr.refs.size() - 1];
+    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+}
+
+inline static void Trace_Pop_Discard(VirtualMachine* vm)
+{
+    // Discard the top of the stack.
+    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+}
+
+inline static void Trace_Arg_String(VirtualMachine* vm)
+{
+    vm->trace.push_back(TY_STRING);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+}
+
+inline static void Trace_Arg_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(TY_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+}
+
+inline static void Trace_Call(VirtualMachine* vm, int call, int args)
+{
+    vm->trace.push_back(IR_CALL);
+    Trace_Int(vm, call);
+    vm->trace.push_back(args);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Yield(VirtualMachine* vm, int call, int args)
+{
+    vm->trace.push_back(IR_YIELD);
+    Trace_Int(vm, call);
+    vm->trace.push_back(args);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Increment_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_INCREMENT_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Decrement_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_DECREMENT_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Add_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_ADD_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2));
+    vm->tr.refs.resize(vm->tr.refs.size() - 2);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Sub_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_SUB_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2));
+    vm->tr.refs.resize(vm->tr.refs.size() - 2);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Mul_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_MUL_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2));
+    vm->tr.refs.resize(vm->tr.refs.size() - 2);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Div_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_DIV_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2));
+    vm->tr.refs.resize(vm->tr.refs.size() - 2);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_App_String_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_APP_STRING_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2));
+    vm->tr.refs.resize(vm->tr.refs.size() - 2);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_App_Int_String(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_APP_INT_STRING);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2));
+    vm->tr.refs.resize(vm->tr.refs.size() - 2);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_App_String_String(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_APP_STRING_STRING);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2));
+    vm->tr.refs.resize(vm->tr.refs.size() - 2);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
+}
+
+inline static void Trace_LoopStart(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_LOOPSTART);
+    vm->tr.ref++;
+}
+
+inline static void Trace_LoopBack(VirtualMachine* vm, int jump, short offset)
+{
+    vm->trace.push_back(IR_LOOPBACK);
+    vm->trace.push_back(jump & 0xFF);
+    vm->trace.push_back(offset & 0xFF);
+    vm->trace.push_back((offset >> 8) & 0xFF);
+    vm->tr.ref++;
+}
+
+inline static void Trace_PromoteGuard(VirtualMachine* vm, size_t tracePos)
+{
+    assert(vm->trace[tracePos] == IR_GUARD);
+    vm->trace[tracePos] = IR_LOOPEXIT;
+}
+
+inline static void Trace_Guard(VirtualMachine* vm, int jump)
+{
+    vm->trace.push_back(IR_GUARD);
+    vm->trace.push_back(jump & 0xFF);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Cmp_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_CMP_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2));
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    vm->tr.refs.resize(vm->tr.refs.size() - 2);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Cmp_String(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_CMP_STRING);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2));
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    vm->tr.refs.resize(vm->tr.refs.size() - 2);
+    vm->tr.ref++;
+}
+
+inline static void Trace_Unary_Minus_Int(VirtualMachine* vm)
+{
+    vm->trace.push_back(IR_UNARY_MINUS_INT);
+    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1));
+    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+    vm->tr.refs.push_back(vm->tr.ref);
+    vm->tr.ref++;
 }
 
 //===================
@@ -353,6 +649,7 @@ void SunScript::ShutdownVirtualMachine(VirtualMachine* vm)
         vm->jit.jit_shutdown(vm->jit_instance);
     }
 
+    delete[] vm->program;
     delete vm;
 }
 
@@ -479,39 +776,17 @@ static void Push_String(VirtualMachine* vm, const char* str)
     vm->stack.push(data);
 }
 
-inline static void Trace_Int(VirtualMachine* vm, int val)
-{
-    if (vm->tracing)
-    {
-        vm->trace.push_back(static_cast<unsigned char>(val & 0xFF));
-        vm->trace.push_back(static_cast<unsigned char>((val >> 8) & 0xFF));
-        vm->trace.push_back(static_cast<unsigned char>((val >> 16) & 0xFF));
-        vm->trace.push_back(static_cast<unsigned char>((val >> 24) & 0xFF));
-    }
-}
-
-inline static void Trace_String(VirtualMachine* vm, const char* str)
-{
-    if (vm->tracing)
-    {
-        while (str != 0) { 
-            vm->trace.push_back(static_cast<unsigned char>(*str));
-            str++;
-        }
-    }
-}
-
 static void Op_Set(VirtualMachine* vm)
 {
     unsigned char type = vm->program[vm->programCounter++];
     const int id = Read_Byte(vm->program, &vm->programCounter) + vm->localBounds;
     auto& local = vm->locals[id];
 
-    if (vm->tracing)
-    {
-    vm->trace.push_back(OP_SET);
-    vm->trace.push_back(static_cast<unsigned char>(id & 0xFF));
-    }
+    //if (vm->tracing)
+    //{
+    //    vm->trace.push_back(OP_SET);
+    //    vm->trace.push_back(static_cast<unsigned char>(id & 0xFF));
+    //}
 
     switch (type)
     {
@@ -526,7 +801,7 @@ static void Op_Set(VirtualMachine* vm)
         int* data = reinterpret_cast<int*>(vm->mm.New(sizeof(int), TY_INT));
         *data = Read_Int(vm->program, &vm->programCounter);
         vm->stack.push(data);
-        Trace_Int(vm, *data);
+        if (vm->tracing) { Trace_Int(vm, *data); }
     }
         break;
     case TY_STRING:
@@ -537,7 +812,7 @@ static void Op_Set(VirtualMachine* vm)
         char* data = reinterpret_cast<char*>(vm->mm.New(sizeof(int), TY_INT));
         std::memcpy(data, str, strlen(str) + 1);
         vm->stack.push(data);
-        Trace_String(vm, str);
+        if (vm->tracing) { Trace_String(vm, str); }
     }
     break;
     default:
@@ -550,18 +825,17 @@ static void Op_Set(VirtualMachine* vm)
 static void Op_Push_Local(VirtualMachine* vm)
 {
     const int id = Read_Byte(vm->program, &vm->programCounter) + vm->localBounds;
-    
-    if (vm->tracing)
-    {
-        vm->trace.push_back(OP_PUSH_LOCAL);
-        vm->trace.push_back(static_cast<unsigned char>(id & 0xFF)); 
-    }
-    
+
     if (vm->statusCode == VM_OK)
     {
         if (vm->locals.size() > id)
         {
             vm->stack.push(vm->locals[id]);
+
+            if (vm->tracing)
+            {
+                Trace_Push_Local(vm, id);
+            }
         }
         else
         {
@@ -574,12 +848,6 @@ static void Op_Push_Local(VirtualMachine* vm)
 static void Op_Push(VirtualMachine* vm)
 {
     unsigned char type = vm->program[vm->programCounter++];
-    
-    if (vm->tracing)
-    {
-        vm->trace.push_back(OP_PUSH);
-        vm->trace.push_back(type);
-    }
 
     switch (type)
     {
@@ -587,14 +855,14 @@ static void Op_Push(VirtualMachine* vm)
     {
         const int val = Read_Int(vm->program, &vm->programCounter);
         Push_Int(vm, val);
-        Trace_Int(vm, val);
+        if (vm->tracing) { Trace_LoadC_Int(vm, val); }
     }
         break;
     case TY_STRING:
     {
          const char* str = Read_String(vm->program, &vm->programCounter);
          Push_String(vm, str);
-         Trace_String(vm, str);
+         if (vm->tracing) { Trace_LoadC_String(vm, str); }
     }
         break;
     }
@@ -626,7 +894,7 @@ static void Op_Return(VirtualMachine* vm)
         RecordReturn(frame.func, vm->programCounter, TY_VOID);
     }
 
-    if (vm->tracing) { vm->trace.push_back(OP_RETURN); }
+    frame.func->depth--;
 
     vm->stackBounds = frame.stackBounds;
     vm->localBounds = frame.localBounds;
@@ -669,8 +937,20 @@ static void Op_Call(VirtualMachine* vm)
             frame.func = &blk.info;
             CreateStackFrame(vm, frame, numArgs, int(blk.info.locals.size()));
             vm->programCounter = address;
+            
+            if (vm->tracing)
+            {
+                vm->tr.locals.resize(vm->locals.size());
+
+                if (blk.info.depth >= 1)
+                {
+                    // Recursive functions don't work for now.. abort the trace
+                    vm->tracing = false;
+                }
+            }
 
             blk.info.counter++;
+            blk.info.depth++;
         }
         else
         {
@@ -682,9 +962,7 @@ static void Op_Call(VirtualMachine* vm)
     {
         if (vm->tracing)
         {
-            vm->trace.push_back(OP_CALL);
-            vm->trace.push_back(numArgs);
-            Trace_Int(vm, id);
+            Trace_Call(vm, id, numArgs);
         }
 
         if (vm->handler)
@@ -714,9 +992,7 @@ static void Op_Yield(VirtualMachine* vm)
 
         if (vm->tracing)
         {
-            vm->trace.push_back(OP_YIELD);
-            vm->trace.push_back(numArgs);
-            Trace_Int(vm, id);
+            Trace_Yield(vm, id, numArgs);
         }
 
         vm->callName = vm->functions[id].name;
@@ -744,8 +1020,6 @@ static void Op_Yield(VirtualMachine* vm)
 static void Op_Pop_Discard(VirtualMachine* vm)
 {
     assert(vm->statusCode == VM_OK);
-    
-    if (vm->tracing) { vm->trace.push_back(OP_POP_DISCARD); }
 
     if (vm->stack.size() > vm->stackBounds)
     {
@@ -757,6 +1031,8 @@ static void Op_Pop_Discard(VirtualMachine* vm)
         else
         {
             vm->stack.pop();
+            
+            if (vm->tracing) { Trace_Pop_Discard(vm); }
         }
     }
 }
@@ -767,15 +1043,14 @@ static void Op_Pop(VirtualMachine* vm)
     
     const int id = Read_Byte(vm->program, &vm->programCounter) + vm->localBounds;
 
-    if (vm->tracing)
-    {
-        vm->trace.push_back(OP_POP);
-        vm->trace.push_back(static_cast<unsigned char>(id));
-    }
-
     if (!vm->stack.empty())
     {
         vm->locals[id] = vm->stack.top();
+
+        if (vm->tracing)
+        {
+            Trace_Pop(vm, id);
+        }
 
         vm->stack.pop();
     }
@@ -795,9 +1070,11 @@ static void Add_String(VirtualMachine* vm, char* v1, void* v2)
     {
     case TY_STRING:
         result << reinterpret_cast<char*>(v2);
+        if (vm->tracing) { Trace_App_String_String(vm); }
         break;
     case TY_INT:
         result << *reinterpret_cast<int*>(v2);
+        if (vm->tracing) { Trace_App_String_Int(vm); }
         break;
     default:
         vm->running = false;
@@ -816,19 +1093,26 @@ static void Add_Int(VirtualMachine* vm, int* v1, void* v2)
     int result = *v1;
     const char type = vm->mm.GetType(v2);
 
-    if (type == TY_INT)
+    switch (type)
     {
+    case TY_INT:
         result += *reinterpret_cast<int*>(v2);
-    }
-    else
+        if (vm->tracing) { Trace_Add_Int(vm); }
+        Push_Int(vm, result);
+        break;
+    case TY_STRING:
     {
+        std::stringstream ss;
+        ss << result;
+        ss << reinterpret_cast<char*>(v2);
+        if (vm->tracing) { Trace_App_Int_String(vm); }
+        Push_String(vm, ss.str().c_str());
+    }
+        break;
+    default:
         vm->running = false;
         vm->statusCode = VM_ERROR;
-    }
-
-    if (vm->statusCode == VM_OK)
-    {
-        Push_Int(vm, result);
+        break;
     }
 }
 
@@ -840,6 +1124,8 @@ static void Sub_Int(VirtualMachine* vm, int* v1, void* v2)
     if (type == TY_INT)
     {
         result = *reinterpret_cast<int*>(v2) - result;
+
+        if (vm->tracing) { Trace_Sub_Int(vm); }
     }
     else
     {
@@ -861,6 +1147,8 @@ static void Mul_Int(VirtualMachine* vm, int* v1, void* v2)
     if (type == TY_INT)
     {
         result *= *reinterpret_cast<int*>(v2);
+
+        if (vm->tracing) { Trace_Mul_Int(vm); }
     }
     else
     {
@@ -882,6 +1170,8 @@ static void Div_Int(VirtualMachine* vm, int* v1, void* v2)
     if (type == TY_INT)
     {
         result = *reinterpret_cast<int*>(v2) / result;
+
+        if (vm->tracing) { Trace_Div_Int(vm); }
     }
     else
     {
@@ -906,7 +1196,7 @@ static void Op_Unary_Minus(VirtualMachine* vm)
         return;
     }
 
-    if (vm->tracing) { vm->trace.push_back(OP_UNARY_MINUS); }
+    if (vm->tracing) { Trace_Unary_Minus_Int(vm); }
 
     void* var1 = vm->stack.top();
     vm->stack.pop();
@@ -932,8 +1222,6 @@ static void Op_Operator(unsigned char op, VirtualMachine* vm)
         vm->statusCode = VM_ERROR;
         return;
     }
-    
-    if (vm->tracing) { vm->trace.push_back(op); }
 
     void* var1 = vm->stack.top();
     vm->stack.pop();
@@ -1056,7 +1344,7 @@ static void Op_Increment(VirtualMachine* vm)
         return;
     }
 
-    if (vm->tracing) { vm->trace.push_back(OP_INCREMENT); }
+    if (vm->tracing) { Trace_Increment_Int(vm); }
 
     void* value = vm->stack.top();
         
@@ -1082,7 +1370,7 @@ static void Op_Decrement(VirtualMachine* vm)
         return;
     }
 
-    if (vm->tracing) { vm->trace.push_back(OP_DECREMENT); }
+    if (vm->tracing) { Trace_Decrement_Int(vm); }
     
     void* value = vm->stack.top();
 
@@ -1097,20 +1385,33 @@ static void Op_Decrement(VirtualMachine* vm)
     }
 }
 
+static char Flip(char jump)
+{
+    switch (jump)
+    {
+    case JUMP_E:
+        return JUMP_NE;
+    case JUMP_NE:
+        return JUMP_E;
+    case JUMP_G:
+        return JUMP_LE;
+    case JUMP_GE:
+        return JUMP_L;
+    case JUMP_L:
+        return JUMP_GE;
+    case JUMP_LE:
+        return JUMP_G;
+    }
+
+    return JUMP;
+}
+
 static void Op_Jump(VirtualMachine* vm)
 {
     unsigned int pc = vm->programCounter;
     const char type = Read_Byte(vm->program, &vm->programCounter);
     const short offset = Read_Short(vm->program, &vm->programCounter);
     bool branchDir = false;
-    
-    if (vm->tracing)
-    {
-        vm->trace.push_back(OP_JUMP);
-        vm->trace.push_back(type);
-        vm->trace.push_back(static_cast<unsigned char>(offset & 0xFF));
-        vm->trace.push_back(static_cast<unsigned char>((offset >> 8) & 0xFF));
-    }
 
     switch (type)
     {
@@ -1167,10 +1468,92 @@ static void Op_Jump(VirtualMachine* vm)
     {
         const auto& frame = vm->frames.top();
         RecordBranch(frame.func, pc, branchDir);
+        
+        // Record a loop
+        if (offset < 0)
+        {
+            RecordLoop(frame.func, vm->programCounter, offset);
+            vm->program[vm->programCounter] |= MK_LOOPSTART;
+        }
     }
     else
     {
         RecordBranch(vm->main, pc, branchDir);
+
+        // Record a loop
+        if (offset < 0)
+        {
+            RecordLoop(vm->main, vm->programCounter, offset);
+            vm->program[vm->programCounter] |= MK_LOOPSTART;
+        }
+    }
+
+    if (vm->tracing)
+    {
+        if (offset < 0)
+        {
+            auto& loop = vm->tr.loop[vm->tr.loop.size() - 1];
+            loop.endRef = vm->tr.ref;
+            loop.end = pc;
+
+            Trace_LoopBack(vm, type, loop.startRef - vm->tr.ref);
+
+            // Pause the tracing for the duration of the loop.
+            vm->tracing = false;
+            vm->tracingPaused = true;
+        }
+        else if (type != JUMP)
+        {
+            if (vm->tr.loop.size() > 0)
+            {
+                auto& loop = vm->tr.loop[vm->tr.loop.size() - 1];
+                auto& guard = loop.guards.emplace_back();
+                guard.pc = pc;
+                guard.tracePos = vm->trace.size();
+            }
+
+            if (branchDir)
+            {
+                Trace_Guard(vm, Flip(type));
+            }
+            else
+            {
+                Trace_Guard(vm, type);
+            }
+        }
+    }
+    else if (vm->tracingPaused)
+    {
+        // Check if we are leaving the loop
+        if (branchDir)
+        {
+            // To be certain we need to check the pc is now beyond the
+            // end of the loop
+            auto& loop = vm->tr.loop[vm->tr.loop.size() - 1];
+            if (vm->programCounter > loop.end)
+            {
+                // We need to promote the guard to a loop exit
+                size_t guardPos = 0;
+                for (size_t i = 0; i < loop.guards.size(); i++)
+                {
+                    auto& guard = loop.guards[i];
+                    if (guard.pc == pc)
+                    {
+                        guardPos = guard.tracePos;
+                        break;
+                    }
+                }
+
+                Trace_PromoteGuard(vm, guardPos);
+
+                // Pop the loop from the stack.
+                vm->tr.loop.resize(vm->tr.loop.size() - 1);
+                
+                // Enable tracing
+                vm->tracing = true;
+                vm->tracingPaused = false;
+            }
+        }
     }
 }
 
@@ -1183,8 +1566,6 @@ static void Op_Compare(VirtualMachine* vm)
         return;
     }
 
-    if (vm->tracing) { vm->trace.push_back(OP_CMP); }
-
     void* item1 = vm->stack.top();
     vm->stack.pop();
 
@@ -1194,10 +1575,12 @@ static void Op_Compare(VirtualMachine* vm)
     if (vm->mm.GetType(item1) == TY_INT && vm->mm.GetType(item2) == TY_INT)
     {
         vm->comparer = *reinterpret_cast<int*>(item2) - *reinterpret_cast<int*>(item1);
+        if (vm->tracing) { Trace_Cmp_Int(vm); }
     }
     else if (vm->mm.GetType(item1) == TY_STRING && vm->mm.GetType(item2) == TY_STRING)
     {
         vm->comparer = strcmp(reinterpret_cast<char*>(item2), reinterpret_cast<char*>(item1));
+        if (vm->tracing) { Trace_Cmp_String(vm); }
     }
     else
     {
@@ -1211,6 +1594,7 @@ static void ResetVM(VirtualMachine* vm)
     vm->mm.Reset();
     vm->programCounter = 0;
     vm->tracing = false;
+    vm->tracingPaused = false;
     vm->stackBounds = 0;
     vm->errorCode = 0;
     vm->flags = 0;
@@ -1239,6 +1623,8 @@ static void ScanFunctions(VirtualMachine* vm, unsigned char* program)
         func.info.pc = functionOffset;
         func.info.size = functionSize;
         func.info.name = name;
+        func.info.depth = 0;
+        std::memset(&func.info.stats, 0, sizeof(func.info.stats));
 
         for (int i = 0; i < numArgs; i++)
         {
@@ -1319,6 +1705,19 @@ inline static void CheckForTimeout(VirtualMachine* vm)
     }
 }
 
+static void LoopStart(VirtualMachine* vm)
+{
+    if (vm->tracing)
+    {
+        auto& pt = vm->tr.loop.emplace_back();
+        pt.startRef = vm->tr.ref;    // point to the loop start
+        pt.endRef = 0;
+        pt.start = vm->programCounter;
+
+        Trace_LoopStart(vm);
+    }
+}
+
 static int ResumeScript2(VirtualMachine* vm)
 {
     StartVM(vm);
@@ -1355,7 +1754,6 @@ static int ResumeScript2(VirtualMachine* vm)
             Op_Call(vm);
             break;
         case OP_DONE:
-            if (vm->tracing) { vm->trace.push_back(OP_DONE); }
             if (vm->statusCode == VM_OK)
             {
                 vm->running = false;
@@ -1399,17 +1797,41 @@ static int ResumeScript2(VirtualMachine* vm)
         case OP_DECREMENT:
             Op_Decrement(vm);
             break;
+        case OP_LSADD:
+        case OP_LSSUB:
+        case OP_LSMUL:
+        case OP_LSDIV:
+            LoopStart(vm);
+            Op_Operator(op, vm);
+            break;
+        case OP_LSCALL:
+            LoopStart(vm);
+            Op_Call(vm);
+            break;
+        case OP_LSSET:
+            LoopStart(vm);
+            Op_Set(vm);
+            break;
+        case OP_LSPOP:
+            LoopStart(vm);
+            Op_Pop(vm);
+            break;
+        case OP_LSPUSH:
+            LoopStart(vm);
+            Op_Push(vm);
+            break;
+        case OP_LSPUSH_LOCAL:
+            LoopStart(vm);
+            Op_Push_Local(vm);
+            break;
+        case OP_LSYIELD:
+            LoopStart(vm);
+            Op_Yield(vm);
+            break;
         }
 
         vm->instructionsExecuted++;
         CheckForTimeout(vm);
-    }
-
-    if (vm->statusCode == VM_OK && vm->tracing)
-    {
-        // End tracing and JIT compile
-        vm->tracing = false;
-        vm->jit_trace = vm->jit.jit_compile_trace(vm->jit_instance, vm, vm->trace.data(), int(vm->trace.size()));
     }
 
     return vm->statusCode;
@@ -1420,56 +1842,12 @@ int SunScript::RunScript(VirtualMachine* vm)
     return RunScript(vm, std::chrono::duration<int, std::nano>::zero());
 }
 
-/*static int RunJIT(VirtualMachine* vm)
+int SunScript::LoadProgram(VirtualMachine* vm, unsigned char* program, unsigned char* debugData, int programSize)
 {
-    const std::string cacheKey = "@main_";
+    delete[] vm->program;
 
-    void* data = vm->jit.jit_search_cache(vm->jit_instance, cacheKey);
-    if (!data)
-    {
-        FunctionInfo* info = nullptr;
-        for (int i = 0; i < vm->blocks.size(); i++)
-        {
-            if (vm->blocks[i].info.name == "main")
-            {
-                info = &vm->blocks[i].info;
-                break;
-            }
-        }
-
-        if (!info)
-        {
-            return VM_ERROR;
-        }
-
-        data = vm->jit.jit_compile(vm->jit_instance, vm, vm->program, info, "");
-        if (data != nullptr)
-        {
-            vm->jit.jit_cache(vm->jit_instance, cacheKey, data);
-        }
-    }
-
-    if (data)
-    {
-        const int status = vm->jit.jit_execute(vm->jit_instance, data);
-        if (status == VM_ERROR)
-        {
-            vm->running = false;
-            vm->statusCode = VM_ERROR;
-        }
-    else if (status == VM_YIELDED)
-    {
-        vm->flags = VM_FLAGS_YIELD_JIT;
-    }
-        return status;
-    }
-
-    return VM_DEOPTIMIZE;
-}*/
-
-int SunScript::LoadProgram(VirtualMachine* vm, unsigned char* program, unsigned char* debugData)
-{
-    vm->program = program;
+    vm->program = new unsigned char[programSize];
+    std::memcpy(vm->program, program, programSize);
     vm->blocks.clear();
     vm->functions.clear();
     delete[] vm->debugLines;
@@ -1496,9 +1874,9 @@ int SunScript::LoadProgram(VirtualMachine* vm, unsigned char* program, unsigned 
     return VM_OK;
 }
 
-int SunScript::LoadProgram(VirtualMachine* vm, unsigned char* program)
+int SunScript::LoadProgram(VirtualMachine* vm, unsigned char* program, int size)
 {
-    return LoadProgram(vm, program, nullptr);
+    return LoadProgram(vm, program, nullptr, size);
 }
 
 int SunScript::RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nano> timeout)
@@ -1507,7 +1885,15 @@ int SunScript::RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nan
     
     if (vm->jit_trace)
     {
-        return vm->jit.jit_execute(vm->jit_instance, vm->jit_trace);
+        const int state = vm->jit.jit_execute(vm->jit_instance, vm->jit_trace);
+        
+        // If it returned an error, a guard failed, try the interpreter instead.
+        if (state != VM_ERROR)
+        {
+            return state;
+        }
+
+        assert(state == VM_ERROR);
     }
 
     // Convert timeout to nanoseconds (or whatever it may be specified in)
@@ -1520,8 +1906,15 @@ int SunScript::RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nan
     if (vm->main->counter == 100 && vm->jit_instance)
     {
         // Run with trace
-        vm->tracing = true;
-        vm->trace.clear();
+        Trace_Initialize(vm);
+        const int state = ResumeScript2(vm);
+        if (state == VM_OK && vm->tracing)
+        {
+            // End tracing and JIT compile
+            vm->tracing = false;
+            vm->jit_trace = vm->jit.jit_compile_trace(vm->jit_instance, vm, vm->trace.data(), int(vm->trace.size()));
+        }
+        return state;
     }
 
     return ResumeScript2(vm);
@@ -1543,6 +1936,7 @@ void SunScript::PushReturnValue(VirtualMachine* vm, const std::string& value)
     if (vm->statusCode == VM_OK)
     {
         Push_String(vm, value.c_str());
+        if (vm->tracing) { Trace_ReturnValue(vm); }
     }
 }
 
@@ -1551,6 +1945,7 @@ void SunScript::PushReturnValue(VirtualMachine* vm, int value)
     if (vm->statusCode == VM_OK)
     {
         Push_Int(vm, value);
+        if (vm->tracing) { Trace_ReturnValue(vm); }
     }
 }
 
@@ -1576,6 +1971,12 @@ int SunScript::GetParamInt(VirtualMachine* vm, int* param)
         *param = *reinterpret_cast<int*>(val);
 
         vm->stack.pop();
+
+        if (vm->tracing)
+        {
+            Trace_Arg_Int(vm);
+        }
+
         return VM_OK;
     }
     else
@@ -1594,6 +1995,12 @@ int SunScript::GetParamString(VirtualMachine* vm, std::string* param)
         *param = reinterpret_cast<char*>(val);
 
         vm->stack.pop();
+
+        if (vm->tracing)
+        {
+            Trace_Arg_String(vm);
+        }
+
         return VM_OK;
     }
     else
@@ -1752,7 +2159,11 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             if (func.blk != -1)
             {
                 auto& blk = vm->blocks[func.blk];
-                ss << (blk.info.pc + vm->programOffset) << " " << blk.info.name << "(" << blk.numArgs << ")" << std::endl;
+                ss << (blk.info.pc + vm->programOffset) << " " << blk.info.name << "(" << blk.numArgs << ")"<< "/" << func.id << std::endl;
+            }
+            else
+            {
+                ss << func.name << "/" << func.id << " [External]" << std::endl;
             }
         }
     }

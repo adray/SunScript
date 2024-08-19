@@ -92,6 +92,16 @@ static int Handler(VirtualMachine* vm)
             return VM_OK;
         }
     }
+    else if (callName == "Rnd")
+    {
+        int intParam1;
+        if (VM_OK == GetParamInt(vm, &intParam1))
+        {
+            const int rnd = rand() % intParam1;
+            SunScript::PushReturnValue(vm, rnd);
+            return VM_OK;
+        }
+    }
     
     return VM_ERROR;
 }
@@ -121,7 +131,8 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     }
 
     unsigned char* program;
-    CompileFile(test->_filename, &program);
+    int programSize;
+    CompileFile(test->_filename, &program, &programSize);
 
     std::chrono::steady_clock clock;
     auto startTime = clock.now().time_since_epoch();
@@ -129,7 +140,7 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     const int runCount = 10000;
     if (program)
     {
-        LoadProgram(vm, program);
+        LoadProgram(vm, program, programSize);
         for (int i = 0; i < runCount; i++)
         {
             int errorCode = RunScript(vm);
