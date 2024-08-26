@@ -350,6 +350,7 @@ inline static void Trace_Initialize(VirtualMachine* vm)
 {
     vm->tr.ref = 0;
     vm->tracing = true;
+    vm->tracingPaused = false;
     vm->trace.clear();
     vm->tr.refs.clear();
     vm->tr.locals.resize(vm->locals.size());

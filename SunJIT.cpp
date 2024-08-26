@@ -1176,187 +1176,23 @@ void JIT_FlowGraph::ProcessBlocks()
 
 //==================================
 
-class RegisterAllocator
+constexpr unsigned int ST_REG = 0;
+constexpr unsigned int ST_STACK = 1;
+
+struct JIT_Allocation
 {
-public:
-    RegisterAllocator()
-    {
-        std::memset(registers, 0, sizeof(registers));
-
-        // Reserved registers
-
-        registers[VM_REGISTER_ESP] = true;
-        registers[VM_REGISTER_EBP] = true;
-        registers[VM_REGISTER_EAX] = true;
-
-#ifdef WIN32
-        //registers[VM_REGISTER_EDI] = true;
-        //registers[VM_REGISTER_ESI] = true;
-
-        registers[VM_REGISTER_R10] = true;
-        registers[VM_REGISTER_R11] = true;
-
-        registers[VM_ARG1] = true;
-        registers[VM_ARG2] = true;
-        registers[VM_ARG3] = true;
-        registers[VM_ARG4] = true;
-#endif
-    }
-
-    int Allocate(int reg)
-    {
-        if (!registers[reg])
-        {
-            registers[reg] = true;
-            //std::cout << "Alloc " << reg << std::endl;
-            return reg;
-        }
-
-        return -1;
-    }
-
-    int Allocate()
-    {
-        for (int i = 0; i < VM_REGISTER_MAX; i++)
-        {
-            if (!registers[i])
-            {
-                registers[i] = true;
-                //std::cout << "Alloc " << i << std::endl;
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    bool IsUsed(int reg)
-    {
-        return registers[reg];
-    }
-
-    void Free(int reg)
-    {
-        registers[reg] = false;
-        //std::cout << "Free " << reg << std::endl;
-    }
-private:
-    bool registers[VM_REGISTER_MAX];
+    unsigned int type;
+    unsigned int reg;
+    unsigned int pos;
 };
-
-struct Local
-{
-    int type;   // The type TY_INT etc
-    int pos;    // The offset on the stack 
-};
-
-unsigned int ST_REG = 0;
-unsigned int ST_STACK = 1;
-unsigned int SF_PUSH = 0x1;
-
-struct StackItem
-{
-    int store;      // Where the stack item resides : ST_REG/ST_STACK
-    int pos;        // The offset on the stack 
-    int reg;        // The register it is stored in
-    int type;       // The type TY_INT etc
-    int flags;
-};
-
-class VirtualStack
-{
-public:
-    VirtualStack() : pos(32) { }
-
-    int Local()
-    {
-        pos += 8;   // 8 bytes
-        return pos;
-    }
-
-    void Push_Local(int pos, int type)
-    {
-        auto& item = stack.emplace_back();
-        item.store = ST_STACK;
-        item.pos = pos;
-        item.type = type;
-        item.flags = 0;
-        item.reg = VM_REGISTER_ESP;
-    }
-
-    //int Push_Stack(int type)
-    //{
-    //    pos -= 8;   // 8 bytes
-
-    //    auto& item = stack.emplace_back();
-    //    item.store = ST_STACK;
-    //    item.pos = pos;
-    //    item.type = type;
-    //    item.flags = SF_PUSH;
-    //    item.reg = VM_REGISTER_EBP;
-
-    //    return item.pos;
-    //}
-
-    void Push_Register(int reg, int type)
-    {
-        auto& item = stack.emplace_back();
-        item.store = ST_REG;
-        item.reg = reg;
-        item.type = type;
-        item.flags = 0;
-        item.pos = 0;
-    }
-
-    void Mov(int dst, int src)
-    {
-        for (int i = 0; i < stack.size(); i++)
-        {
-            if (stack[i].reg == src)
-            {
-                stack[i].reg = dst;
-                break;
-            }
-        }
-    }
-
-    void Peek(int depth, StackItem* item)
-    {
-        const size_t pos = Size() - 1 - depth;
-        if (pos >= 0)
-        {
-            *item = stack[pos];
-        }
-    }
-
-    StackItem Pop()
-    {
-        StackItem item = *stack.rbegin();
-        stack.erase(stack.begin() + stack.size() - 1);
-        if ((item.flags & SF_PUSH) == SF_PUSH)
-        {
-            pos -= 8;   // 8 bytes
-        }
-
-        return item;
-    }
-
-    inline size_t Size() const { return stack.size(); }
-
-private:
-    std::vector<StackItem> stack;
-    int pos;
-};
-
-//==================================
-
 
 class JIT_Analyzer
 {
 public:
     void Load(unsigned char* ir, unsigned int count);
-    int GetRegister(int index);
+    JIT_Allocation GetAllocation(int index);
     bool IsRegisterUsed(int reg);
+    int StackSize();
     ~JIT_Analyzer();
 
 private:
@@ -1375,18 +1211,23 @@ private:
     public:
         Allocation();
         void Initialize(int reg, bool enabled);
+        void Initialize(int pos);
         inline void SetEnabled(bool enabled) { _enabled = enabled; }
         void InsertBefore(Node* before, int ref, int start, int end);
         void InsertAfter(Node* after, int ref, int start, int end);
         void Insert(int ref, int start, int end);
 
-        inline bool Enabled() { return _enabled; }
-        inline Node* Head() { return _head; }
-        inline Node* Tail() { return _tail; }
-        inline int Register() { return _reg; }
+        inline bool Enabled() const { return _enabled; }
+        inline Node* Head() const { return _head; }
+        inline Node* Tail() const { return _tail; }
+        inline int Register() const { return _reg; }
+        inline int Type() const { return _type; }
+        inline int Pos() const { return _pos; }
 
     private:
+        int _type;
         int _reg;
+        int _pos;
         bool _enabled;
         Node* _head;
         Node* _tail;
@@ -1397,12 +1238,14 @@ private:
 
     std::vector<int> liveness;
     std::vector<Allocation> allocations;
-    std::vector<int> registers;
+    std::vector<JIT_Allocation> registers;
 };
 
 JIT_Analyzer::Allocation::Allocation()
     :
     _reg(0),
+    _pos(0),
+    _type(0),
     _enabled(true),
     _head(nullptr),
     _tail(nullptr)
@@ -1423,6 +1266,11 @@ JIT_Analyzer::~JIT_Analyzer()
     }
 }
 
+int JIT_Analyzer::StackSize()
+{
+    return int(allocations.size()) - VM_REGISTER_MAX;
+}
+
 bool JIT_Analyzer::IsRegisterUsed(int reg)
 {
     if (reg >= 0 && reg < registers.size())
@@ -1433,20 +1281,29 @@ bool JIT_Analyzer::IsRegisterUsed(int reg)
     return false;
 }
 
-int JIT_Analyzer::GetRegister(int index)
+JIT_Allocation JIT_Analyzer::GetAllocation(int index)
 {
     if (index >= 0 && index < registers.size())
     {
         return registers[index];
     }
 
-    return -1;
+    return JIT_Allocation();
 }
 
 void JIT_Analyzer::Allocation::Initialize(int reg, bool enabled)
 {
+    _type = ST_REG;
     _reg = reg;
     _enabled = enabled;
+}
+
+void JIT_Analyzer::Allocation::Initialize(int pos)
+{
+    _type = ST_STACK;
+    _reg = VM_REGISTER_ESP;
+    _pos = pos;
+    _enabled = true;
 }
 
 void JIT_Analyzer::Allocation::Insert(int ref, int start, int end)
@@ -1552,7 +1409,7 @@ void JIT_Analyzer::AllocateRegister(int ref, int start, int end)
             break;
         }
 
-        // Check if we can use this register
+        // Check if we can use this register/memory
         // If we don't overlap with anything existing we can use it
 
         Node* node = allocation.Head();
@@ -1602,7 +1459,13 @@ void JIT_Analyzer::AllocateRegister(int ref, int start, int end)
         }
     }
 
-    assert(ok); // TODO: allocate to stack instead
+   // Allocate a new place on the stack instead
+    if (!ok)
+    {
+        JIT_Analyzer::Allocation& allocation = allocations.emplace_back();
+        allocation.Initialize(32);
+        allocation.Insert(ref, start, end);
+    }
 }
 
 void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
@@ -1697,7 +1560,10 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
         Node* node = al.Head();
         while (node)
         {
-            registers[node->ref] = al.Register();
+            auto& item = registers[node->ref];
+            item.reg = al.Register();
+            item.type = al.Type();
+            item.pos = al.Pos();
             node = node->next;
         }
     }
@@ -1790,9 +1656,9 @@ public:
     //RegisterAllocator allocator;
     //VirtualStack stack;
     //std::vector<Local> locals;
+    //JIT_FlowGraph fg;
     JIT_Trace* _trace;
     JIT_Manager* _manager;
-    JIT_FlowGraph fg;
     JIT_Analyzer analyzer;
     FunctionInfo* info;
     int size;
@@ -1933,7 +1799,11 @@ extern "C"
         }
         else if (GetParamString(vm, &val) == VM_OK)
         {
-            return (char*)val.c_str();
+            // TODO: this should use the memory manager
+            char* copy = new char[val.size() + 1];
+            std::memcpy(copy, val.c_str(), val.size());
+            copy[val.size()] = 0;
+            return copy;
         }
 
         return 0;
@@ -2232,11 +2102,11 @@ static void vm_jit_cmp_string(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref1);
-    const int reg2 = jitter->analyzer.GetRegister(ref2);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
 
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, reg1);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, reg2);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, a1.reg);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a2.reg);
 
     vm_jit_call_internal_x64(jitter, (void*)strcmp);
 
@@ -2248,10 +2118,10 @@ static void vm_jit_cmp_int(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref1);
-    const int reg2 = jitter->analyzer.GetRegister(ref2);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
 
-    vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, reg1, reg2);
+    vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, a1.reg, a2.reg);
 }
 
 //static void vm_jit_cmp(Jitter* jitter)
@@ -2445,19 +2315,19 @@ static void vm_jit_append_string_int(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref1);
-    const int reg2 = jitter->analyzer.GetRegister(ref2);
-    const int reg3 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, reg1);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, reg2);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, a2.reg);
 
     vm_jit_call_internal_x64(jitter, (void*)vm_append_string_int);
     
-    if (reg3 != VM_REGISTER_EAX)
+    if (a3.reg != VM_REGISTER_EAX)
     {
-        vm_mov_reg_to_reg_x64(jitter->program, jitter->count, reg3, VM_REGISTER_EAX);
+        vm_mov_reg_to_reg_x64(jitter->program, jitter->count, a3.reg, VM_REGISTER_EAX);
     }
 }
 
@@ -2465,19 +2335,19 @@ static void vm_jit_append_int_string(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref1);
-    const int reg2 = jitter->analyzer.GetRegister(ref2);
-    const int reg3 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, reg1);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, reg2);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, a2.reg);
 
     vm_jit_call_internal_x64(jitter, (void*)vm_append_int_string);
 
-    if (reg3 != VM_REGISTER_EAX)
+    if (a3.reg != VM_REGISTER_EAX)
     {
-        vm_mov_reg_to_reg_x64(jitter->program, jitter->count, reg3, VM_REGISTER_EAX);
+        vm_mov_reg_to_reg_x64(jitter->program, jitter->count, a3.reg, VM_REGISTER_EAX);
     }
 }
 
@@ -2485,19 +2355,19 @@ static void vm_jit_append_string_string(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref1);
-    const int reg2 = jitter->analyzer.GetRegister(ref2);
-    const int reg3 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, reg1);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, reg2);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, a2.reg);
 
     vm_jit_call_internal_x64(jitter, (void*)vm_append_string_string);
 
-    if (reg3 != VM_REGISTER_EAX)
+    if (a3.reg != VM_REGISTER_EAX)
     {
-        vm_mov_reg_to_reg_x64(jitter->program, jitter->count, reg3, VM_REGISTER_EAX);
+        vm_mov_reg_to_reg_x64(jitter->program, jitter->count, a3.reg, VM_REGISTER_EAX);
     }
 }
 
@@ -2505,15 +2375,54 @@ static void vm_jit_add_int(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref1);
-    const int reg2 = jitter->analyzer.GetRegister(ref2);
-    const int reg3 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    if (reg1 != reg3)
+    int dst = 0;
+    switch (a3.type)
     {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, reg3, reg1);
+    case ST_REG:
+        dst = a3.reg;
+        break;
+    case ST_STACK:
+        dst = VM_REGISTER_EAX;
+        break;
     }
-    vm_add_reg_to_reg_x64(jitter->jit, jitter->count, reg3, reg2);
+
+    switch (a1.type)
+    {
+    case ST_REG:
+        if (a1.reg != dst)
+        {
+            vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, dst, a1.reg);
+        }
+        break;
+    case ST_STACK:
+        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, a1.reg, a1.pos);
+        break;
+    }
+
+    switch (a2.type)
+    {
+    case ST_REG:
+        vm_add_reg_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg);
+        break;
+    case ST_STACK:
+        vm_add_memory_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg, a2.pos);
+        break;
+    }
+
+    if (a3.type == ST_STACK)
+    {
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a3.reg, a3.pos, dst);
+    }
+
+    //if (a1.reg != a3.reg)
+    //{
+    //    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg);
+    //}
+    //vm_add_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a2.reg);
 }
 
 //static void vm_jit_add(Jitter* jitter)
@@ -2586,15 +2495,15 @@ static void vm_jit_sub_int(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref1);
-    const int reg2 = jitter->analyzer.GetRegister(ref2);
-    const int reg3 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
     
-    if (reg2 != reg3)
+    if (a2.reg != a3.reg)
     {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, reg3, reg2);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a2.reg);
     }
-    vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, reg3, reg1);
+    vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg);
 }
 
 //static void vm_jit_sub(Jitter* jitter)
@@ -2652,15 +2561,15 @@ static void vm_jit_mul_int(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref1);
-    const int reg2 = jitter->analyzer.GetRegister(ref2);
-    const int reg3 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    if (reg1 != reg3)
+    if (a1.reg != a3.reg)
     {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, reg3, reg1);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg);
     }
-    vm_mul_reg_to_reg_x64(jitter->jit, jitter->count, reg3, reg2);
+    vm_mul_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a2.reg);
 }
 
 //static void vm_jit_mul(Jitter* jitter)
@@ -2714,15 +2623,15 @@ static void vm_jit_div_int(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref1);
-    const int reg2 = jitter->analyzer.GetRegister(ref2);
-    const int reg3 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, reg2);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, a2.reg);
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EDX, 0);
-    vm_div_reg_x64(jitter->jit, jitter->count, reg1);
+    vm_div_reg_x64(jitter->jit, jitter->count, a1.reg);
 
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, reg3, VM_REGISTER_EAX);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, VM_REGISTER_EAX);
 }
 
 //static void vm_jit_div(Jitter* jitter)
@@ -2777,13 +2686,13 @@ static void vm_jit_div_int(Jitter* jitter)
 static void vm_jit_dec_int(Jitter* jitter)
 {
     const int ref = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref);
-    const int reg2 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    vm_dec_reg_x64(jitter->jit, jitter->count, reg1);
-    if (reg1 != reg2)
+    vm_dec_reg_x64(jitter->jit, jitter->count, a1.reg);
+    if (a1.reg != a2.reg)
     {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, reg2, reg1);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a2.reg, a1.reg);
     }
 }
 
@@ -2826,13 +2735,13 @@ static void vm_jit_dec_int(Jitter* jitter)
 static void vm_jit_inc_int(Jitter* jitter)
 {
     const int ref = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref);
-    const int reg2 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    vm_inc_reg_x64(jitter->jit, jitter->count, reg1);
-    if (reg1 != reg2)
+    vm_inc_reg_x64(jitter->jit, jitter->count, a1.reg);
+    if (a1.reg != a2.reg)
     {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, reg2, reg1);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a2.reg, a1.reg);
     }
 }
 
@@ -2875,13 +2784,13 @@ static void vm_jit_inc_int(Jitter* jitter)
 static void vm_jit_neg_int(Jitter* jitter)
 {
     const int ref = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg1 = jitter->analyzer.GetRegister(ref);
-    const int reg2 = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    vm_neg_reg_x64(jitter->jit, jitter->count, reg1);
-    if (reg1 != reg2)
+    vm_neg_reg_x64(jitter->jit, jitter->count, a1.reg);
+    if (a1.reg != a2.reg)
     {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, reg2, reg1);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a2.reg, a1.reg);
     }
 }
 
@@ -2918,45 +2827,52 @@ static void vm_jit_load_string(Jitter* jitter)
 {
     const char* str = (char*)&jitter->program[*jitter->pc];
     (*jitter->pc) += static_cast<unsigned int>(strlen(str)) + 1;
-    const int reg = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation a = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, reg, (long long)str);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, a.reg, (long long)str);
 }
 
 static void vm_jit_load_int(Jitter* jitter)
 {
     const int value = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg = jitter->analyzer.GetRegister(jitter->refIndex);
+    const JIT_Allocation al = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, reg, value);
+    switch (al.type)
+    {
+    case ST_REG:
+        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, al.reg, value);
+        break;
+    case ST_STACK:
+        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, value);
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, VM_REGISTER_EAX);
+        break;
+    }
 }
 
-static void vm_jit_call_push_stub(/*VirtualStack& stack,*/Jitter* jitter, VirtualMachine* vm, unsigned char* jit, int& count)
+static void vm_jit_call_push_stub(Jitter* jitter, VirtualMachine* vm, unsigned char* jit, int& count)
 {
-    //StackItem item = stack.Pop();
-    //if (item.store == ST_REG)
-    //{
-    //    vm_mov_reg_to_reg_x64(jit, count, VM_ARG2, item.reg);
-    //}
-    //else if (item.store == ST_STACK)
-    //{
-    //    vm_mov_memory_to_reg_x64(jit, count, VM_ARG2, item.reg, item.pos);
-    //}
-
     const int type = jitter->program[*jitter->pc];
     (*jitter->pc)++;
     const int ref = vm_jit_read_int(jitter->program, jitter->pc);
-    const int reg = jitter->analyzer.GetRegister(ref);
+    const JIT_Allocation al = jitter->analyzer.GetAllocation(ref);
 
-    vm_mov_reg_to_reg_x64(jit, count, VM_ARG2, reg);
+    switch (al.type)
+    {
+    case ST_REG:
+        vm_mov_reg_to_reg_x64(jit, count, VM_ARG2, al.reg);
+        break;
+    case ST_STACK:
+        vm_mov_memory_to_reg_x64(jit, count, VM_ARG2, al.reg, al.pos);
+        break;
+    }
 
     if (type == TY_INT)
     {
-        vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R13, (long long)vm_push_int_stub);
+        vm_mov_imm_to_reg_x64(jit, count, VM_ARG4, (long long)vm_push_int_stub);
     }
     else if (type == TY_STRING)
     {
-        vm_mov_imm_to_reg_x64(jit, count, VM_REGISTER_R13, (long long)vm_push_string_stub);
+        vm_mov_imm_to_reg_x64(jit, count, VM_ARG4, (long long)vm_push_string_stub);
     }
 
     // Store the VM pointer in ARG1.
@@ -2964,7 +2880,7 @@ static void vm_jit_call_push_stub(/*VirtualStack& stack,*/Jitter* jitter, Virtua
     vm_mov_imm_to_reg_x64(jit, count, VM_ARG1, (long long)vm);
 
     // Call the function.
-    vm_call_absolute(jit, count, VM_REGISTER_R13);
+    vm_call_absolute(jit, count, VM_ARG4);
 }
 
 static void vm_jit_store_registers(Jitter* jitter)
@@ -3006,10 +2922,6 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
     // R13 - CALLEE ADDR
     // ARG1 - VM ADDR
     // ARG2 - PARAMETER
-    
-    //vm_jit_spill_register(jitter, VM_ARG1);
-    //vm_jit_spill_register(jitter, VM_ARG2);
-    //vm_jit_spill_register(jitter, VM_ARG3);
 
     if (numParams >= 1)
     {
@@ -3032,8 +2944,8 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
 
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, (long long)name);
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, numParams);
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_R13, (long long)vm_call_stub);
-    vm_call_absolute(jitter->jit, jitter->count, VM_REGISTER_R13);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG4, (long long)vm_call_stub);
+    vm_call_absolute(jitter->jit, jitter->count, VM_ARG4);
     
     vm_jit_restore_registers(jitter);
 
@@ -3041,12 +2953,10 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
     // return value is the type we are expecting to get back.
     // Otherwise abort the trace.
 
-    //jitter->stack.Push_Register(VM_REGISTER_EAX, TY_INT);
-
-    const int dst = jitter->analyzer.GetRegister(jitter->refIndex);
-    if (dst != VM_REGISTER_EAX)
+    const JIT_Allocation dst = jitter->analyzer.GetAllocation(jitter->refIndex);
+    if (dst.reg != VM_REGISTER_EAX)
     {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, dst, VM_REGISTER_EAX);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, dst.reg, VM_REGISTER_EAX);
     }
 }
 
@@ -3205,7 +3115,7 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EBX);
     }
 
-    const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */ /*+ 8 * int(jitter->locals.size())space for locals*/);
+    const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */ + 8 * jitter->analyzer.StackSize()/*space for locals*/ );
 
     vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize); // grow stack
 
@@ -3705,7 +3615,7 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     //std::cout << std::endl;
     //===============================
     
-    //JIT_DumpTrace(trace, size);
+    JIT_DumpTrace(trace, size);
 
     std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
     jitter->program = trace;
