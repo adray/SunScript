@@ -48,11 +48,17 @@ enum vm_register
 #define VM_ARG2 VM_REGISTER_EDX
 #define VM_ARG3 VM_REGISTER_R8
 #define VM_ARG4 VM_REGISTER_R9
+#define VM_ARG5 (-1)
+#define VM_ARG6 (-1)
+#define VM_MAX_ARGS 4
 #else
 #define VM_ARG1 VM_REGISTER_EDI
 #define VM_ARG2 VM_REGISTER_ESI
 #define VM_ARG3 VM_REGISTER_EDX
 #define VM_ARG4 VM_REGISTER_ECX
+#define VM_ARG5 VM_REGISTER_R8
+#define VM_ARG6 VM_REGISTER_R9
+#define VM_MAX_ARGS 6
 #endif
 
 enum vm_instruction_type
@@ -2886,13 +2892,9 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
     // ARG1 - VM ADDR
     // ARG2 - PARAMETER
 
-    if (numParams >= 1)
+    for (int i = 0; i < numParams; i++)
     {
-       vm_jit_call_push_stub(jitter, vm, jitter->jit, jitter->count);
-    }
-    if (numParams >= 2)
-    {
-       vm_jit_call_push_stub(jitter, vm, jitter->jit, jitter->count);
+        vm_jit_call_push_stub(jitter, vm, jitter->jit, jitter->count);
     }
 
     // Store the VM pointer in ARG1.
