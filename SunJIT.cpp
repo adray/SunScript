@@ -1378,10 +1378,6 @@ void JIT_Analyzer::InitializeAllocations()
     allocations[VM_REGISTER_EBP].SetEnabled(false);
     allocations[VM_REGISTER_EAX].SetEnabled(false);
 
-#ifdef WIN32
-    //allocations[VM_REGISTER_EDI].SetEnabled(false);
-    //allocations[VM_REGISTER_ESI].SetEnabled(false);
-
     allocations[VM_REGISTER_R10].SetEnabled(false);
     allocations[VM_REGISTER_R11].SetEnabled(false);
 
@@ -1389,7 +1385,6 @@ void JIT_Analyzer::InitializeAllocations()
     allocations[VM_ARG2].SetEnabled(false);
     allocations[VM_ARG3].SetEnabled(false);
     allocations[VM_ARG4].SetEnabled(false);
-#endif
 }
 
 void JIT_Analyzer::AllocateRegister(int ref, int start, int end)
@@ -2883,38 +2878,6 @@ static void vm_jit_call_push_stub(Jitter* jitter, VirtualMachine* vm, unsigned c
     vm_call_absolute(jit, count, VM_ARG4);
 }
 
-static void vm_jit_store_registers(Jitter* jitter)
-{
-#ifndef WIN32
-    StackItem st;
-    auto& stk = jitter->stack;
-    for (int i = 0; i < stk.Size(); i++)
-    {
-        stk.Peek(i, &st);
-        if (st.store == ST_REG)
-        {
-            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, (i+1) * 8, st.reg);
-        }
-    }
-#endif
-}
-
-static void vm_jit_restore_registers(Jitter* jitter)
-{
-#ifndef WIN32
-    StackItem st;
-    auto& stk = jitter->stack;
-    for (int i = 0; i < stk.Size(); i++)
-    {
-        stk.Peek(i, &st);
-        if (st.store == ST_REG)
-        {
-            vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, st.reg, VM_REGISTER_ESP, (i+1) * 8);
-        }
-    }
-#endif
-}
-
 static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, const char* name)
 {
     // Calls are the in the form:
@@ -2925,18 +2888,12 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
 
     if (numParams >= 1)
     {
-       vm_jit_store_registers(jitter);
        vm_jit_call_push_stub(jitter, vm, jitter->jit, jitter->count);
-       vm_jit_restore_registers(jitter);
     }
     if (numParams >= 2)
     {
-       vm_jit_store_registers(jitter);
        vm_jit_call_push_stub(jitter, vm, jitter->jit, jitter->count);
-       vm_jit_restore_registers(jitter);
     }
-
-    vm_jit_store_registers(jitter);
 
     // Store the VM pointer in ARG1.
     // We do this each time in case the register is cleared.
@@ -2946,8 +2903,6 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, numParams);
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG4, (long long)vm_call_stub);
     vm_call_absolute(jitter->jit, jitter->count, VM_ARG4);
-    
-    vm_jit_restore_registers(jitter);
 
     // TODO: handle return value; we simply need to check the
     // return value is the type we are expecting to get back.
@@ -3615,7 +3570,7 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     //std::cout << std::endl;
     //===============================
     
-    JIT_DumpTrace(trace, size);
+    //JIT_DumpTrace(trace, size);
 
     std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
     jitter->program = trace;
