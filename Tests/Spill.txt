@@ -1,3 +1,6 @@
+// Variables a-g will use registers
+// Further variables and temporaries which live at the same time will use the stack
+
 var a = 1;
 var b = 2;
 var c = 3;
@@ -8,6 +11,17 @@ var g = 7;
 
 assert(g, 7);
 
+var w = 10;
+var y = w * b;
+
+assert(20, y);
+
+var z = w / b;
+
+assert(5, z);
+
 var x = a + b + c + d + e + f + g;
 
 assert(28, x);
+
+

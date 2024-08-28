@@ -259,9 +259,6 @@ namespace SunScript
 
 inline static void RecordLoop(FunctionInfo* info, unsigned int pc, int offset)
 {
-    // TODO: record the loop somewhere it can be easily accessed via the pc
-    // In the tracing phase we only need to record the loop once? some more research is required.
-
     const unsigned int numCount = sizeof(info->stats.loopStats) / sizeof(LoopStat);
     for (unsigned int i = 0; i < numCount; i++)
     {
