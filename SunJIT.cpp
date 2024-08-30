@@ -1538,10 +1538,14 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             break;
         case IR_LOOPSTART:
             break;
+        case IR_PHI:
+            p1 = vm_jit_read_int(ir, &pc);
+            p2 = vm_jit_read_int(ir, &pc);
+            break;
         }
 
-        if (p1 > -1) { liveness[p1] = std::max(liveness[p1], ref - p1); }
-        if (p2 > -1) { liveness[p2] = std::max(liveness[p2], ref - p2); }
+        if (p1 > -1 && p1 < ref) { liveness[p1] = std::max(liveness[p1], ref - p1); }
+        if (p2 > -1 && p2 < ref) { liveness[p2] = std::max(liveness[p2], ref - p2); }
 
         liveness.push_back(0);
         ref++;
@@ -1617,6 +1621,14 @@ struct JIT_Jump
     int _size;
 };
 
+struct JIT_Phi
+{
+    int _state;
+    int _pos;   // # of instruction
+    int _left;
+    int _right;
+};
+
 struct JIT_Trace
 {
     void* _jit_data;
@@ -1629,6 +1641,7 @@ struct JIT_Trace
     std::vector<JIT_Jump> _forwardJumps;
     std::vector<JIT_BackwardJump> _backwardJumps;
     std::vector<JIT_ExitJump> _exitJumps;
+    std::vector<JIT_Phi> _phis;
 
     uint64_t _startTime;     // compilation start time
     uint64_t _endTime;       // compilation end time
@@ -1644,7 +1657,7 @@ public:
     void* _yield_resume;
     void* _vm_resume;
     long long _stackPtr;
-    long long _stackSize;
+long long _stackSize;
 };
 
 class JIT_Manager
@@ -2291,6 +2304,22 @@ static void vm_jit_loopback(Jitter* jitter)
             break;
         }
     }
+    
+    // Apply Phis
+    for (size_t i = 0; i < jitter->_trace->_phis.size(); i++)
+    {
+        auto& phi = jitter->_trace->_phis[i];
+        if (phi._state == PATCH_INITIALIZED)
+        {
+            phi._state = PATCH_APPLIED;
+
+            JIT_Allocation a1 = jitter->analyzer.GetAllocation(phi._right);
+            JIT_Allocation a2 = jitter->analyzer.GetAllocation(phi._pos);
+
+            const int dst = vm_jit_decode_dst(a2);
+            vm_jit_mov(jitter, a1, dst);
+        }
+    }
 
     // Patch loop exits
     for (size_t i = 0; i < jitter->_trace->_exitJumps.size(); i++)
@@ -2691,11 +2720,11 @@ static void vm_jit_dec_int(Jitter* jitter)
         vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a2.reg, a2.pos, dst);
     }
 
-    if (a1.type == ST_REG)
-    {
-        // TODO: workaround until register is preserved
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a1.reg, dst);
-    }
+    //if (a1.type == ST_REG)
+    //{
+    //    // TODO: workaround until register is preserved
+    //    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a1.reg, dst);
+    //}
 }
 
 //static void vm_jit_dec(Jitter* jitter)
@@ -3052,6 +3081,24 @@ inline static void vm_jit_epilog(Jitter* jitter, const int stacksize)
 //    }
 //}
 
+static void vm_jit_phi(VirtualMachine* vm, Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+
+    JIT_Phi& phi = jitter->_trace->_phis.emplace_back();
+    phi._state = PATCH_INITIALIZED;
+    phi._pos = jitter->refIndex;
+    phi._left = ref1;
+    phi._right = ref2;
+
+    JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    JIT_Allocation a2 = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    const int dst = vm_jit_decode_dst(a2);
+    vm_jit_mov(jitter, a1, dst);
+}
+
 static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
 {
     // Store non-volatile registers
@@ -3153,6 +3200,9 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
             break;
         case IR_YIELD:
             vm_jit_yield(vm, jitter);
+            break;
+        case IR_PHI:
+            vm_jit_phi(vm, jitter);
             break;
         default:
             abort();
@@ -3556,6 +3606,9 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
         case IR_LOOPEXIT:
             std::cout << " IR_LOOPEXIT " << int(trace[pc++]) << std::endl;
             break;
+        case IR_PHI:
+            std::cout << " IR_PHI " << vm_jit_read_int(trace, &pc) << " " << vm_jit_read_int(trace, &pc) << std::endl;
+            break;
         default:
             std::cout << " UNKOWN" << std::endl;
         }
@@ -3577,7 +3630,7 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     //std::cout << std::endl;
     //===============================
     
-    //JIT_DumpTrace(trace, size);
+    JIT_DumpTrace(trace, size);
 
     std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
     jitter->program = trace;

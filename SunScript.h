@@ -77,6 +77,7 @@ namespace SunScript
     constexpr unsigned char IR_LOOPBACK = 0x60;
     constexpr unsigned char IR_LOOPSTART = 0x61;
     constexpr unsigned char IR_LOOPEXIT = 0x62;
+    constexpr unsigned char IR_PHI = 0x63;
 
     struct VirtualMachine;
     struct Program;
@@ -92,6 +93,13 @@ namespace SunScript
             char _type;
         };
 
+        struct Segment
+        {
+            unsigned char* _memory;
+            uint64_t _pos;
+            uint64_t _totalSize;
+        };
+
     public:
 
         MemoryManager();
@@ -104,9 +112,7 @@ namespace SunScript
         ~MemoryManager();
 
     private:
-        unsigned char* _memory;
-        uint64_t _pos;
-        uint64_t _totalSize;
+        std::vector<Segment> _segments;
     };
 
     struct Label
