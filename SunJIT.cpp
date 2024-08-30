@@ -209,8 +209,8 @@ static vm_instruction gInstructions[VMI_MAX_INSTRUCTIONS] = {
     INS(0x0, 0xCB, VMI_UNUSED, VM_INSTRUCTION_NONE, CODE_NONE, 0x0),           // VMI_FAR_RETURN
 
     INS(0x48, 0x3B, VMI_UNUSED, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_RM), // VMI_CMP64_SRC_REG_DST_REG
-    INS(0x48, 0x39, VMI_UNUSED, VM_INSTRUCTION_BINARY, CODE_BMR, VMI_ENC_MR), // VMI_CMP64_SRC_REG_DST_MEM
-    INS(0x48, 0x3B, VMI_UNUSED, VM_INSTRUCTION_BINARY, CODE_BRM, VMI_ENC_RM), // VMI_CMP64_SRC_MEM_DST_REG
+    INS(0x48, 0x39, VMI_UNUSED, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_MR), // VMI_CMP64_SRC_REG_DST_MEM
+    INS(0x48, 0x3B, VMI_UNUSED, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_RM), // VMI_CMP64_SRC_MEM_DST_REG
 
     INS(0x0, 0xEB, VMI_UNUSED, VM_INSTRUCTION_CODE_OFFSET, CODE_UI, VMI_ENC_D), // VMI_J8
     INS(0x0, 0x74, VMI_UNUSED, VM_INSTRUCTION_CODE_OFFSET, CODE_UI, VMI_ENC_D), // VMI_JE8
@@ -627,14 +627,14 @@ inline static void vm_cmp_reg_to_reg_x64(unsigned char* program, int& count, cha
     vm_emit_brr(gInstructions[VMI_CMP64_SRC_REG_DST_REG], program, count, dst, src);
 }
 
-inline static void vm_cmp_reg_to_memory_x64(unsigned char* program, int& count, char dst, char src)
+inline static void vm_cmp_reg_to_memory_x64(unsigned char* program, int& count, char dst, int dst_offset, char src)
 {
-    vm_emit_bmr(gInstructions[VMI_CMP64_SRC_REG_DST_MEM], program, count, dst, src);
+    vm_emit_bmro(gInstructions[VMI_CMP64_SRC_REG_DST_MEM], program, count, dst, dst_offset, src);
 }
 
-inline static void vm_cmp_memory_to_reg_x64(unsigned char* program, int& count, char dst, char src)
+inline static void vm_cmp_memory_to_reg_x64(unsigned char* program, int& count, char dst, char src, int src_offset)
 {
-    vm_emit_brm(gInstructions[VMI_CMP64_SRC_MEM_DST_REG], program, count, dst, src);
+    vm_emit_brmo(gInstructions[VMI_CMP64_SRC_MEM_DST_REG], program, count, dst, src, src_offset);
 }
 
 inline static void vm_jump_unconditional_8(unsigned char* program, int& count, char imm)
@@ -1879,65 +1879,6 @@ static void vm_jit_call_internal_x64(Jitter* jitter, void* address)
     vm_call_absolute(jitter->jit, jitter->count, VM_REGISTER_EAX);
 }
 
-//static void vm_jit_call_internal_x64(Jitter* jitter, int numParams, void* address, int retType)
-//{
-//    //jitter->allocator.Allocate(VM_ARG1);
-//    //vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)jitter->_manager);
-//
-//    //int registers[4] = {
-//    //    VM_ARG1,
-//    //    VM_ARG2,
-//    //    VM_ARG3,
-//    //    VM_ARG4
-//    //};
-//    //for (int i = 1; i <= numParams; i++)
-//    //{
-//    //    const StackItem item = jitter->stack.Pop();
-//    //    if (item.store == ST_REG)
-//    //    {
-//    //        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, registers[i], item.reg);
-//    //        jitter->allocator.Allocate(registers[i]);
-//    //    }
-//    //    else if (item.store == ST_STACK)
-//    //    {
-//    //        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, registers[i], item.reg, item.pos);
-//    //        jitter->allocator.Allocate(registers[i]);
-//    //    }
-//    //}
-//
-//    const int call = jitter->allocator.Allocate();
-//    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, call, (long long)address);
-//    vm_call_absolute(jitter->jit, jitter->count, call);
-//    jitter->allocator.Free(call);
-//
-//    if (retType != TY_VOID)
-//    {
-//        jitter->allocator.Allocate(VM_REGISTER_EAX);
-//        jitter->stack.Push_Register(VM_REGISTER_EAX, retType);
-//    }
-//
-//    for (int i = 1; i <= numParams; i++)
-//    {
-//        jitter->allocator.Free(registers[i]);
-//    }
-//
-//    //jitter->allocator.Free(VM_REGISTER_ECX);
-//}
-
-//static void vm_jit_spill_register(Jitter* jitter, int reg)
-//{
-//    if (jitter->allocator.IsUsed(reg))
-//    {
-//        const int spill = jitter->allocator.Allocate();
-//        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, spill, reg);
-//
-//        jitter->stack.Mov(spill, reg);
-//        
-//        // NOTE: we don't free this register in case we need to spill more
-//        // and we don't want to spill them into registers we just freed.
-//    }
-//}
-
 static std::string vm_jit_read_string(unsigned char* program, unsigned int* pc)
 {
     std::string str;
@@ -1995,101 +1936,6 @@ static void vm_jit_mov(Jitter* jitter, const JIT_Allocation& al, int dst)
         break;
     }
 }
-
-//static void vm_jit_pop(Jitter* jitter)
-//{
-//    const int id = jitter->program[*jitter->pc];
-//    (*jitter->pc)++;
-//
-//    StackItem it = jitter->stack.Pop();
-//    Local& local = jitter->locals[id];
-//    if (it.store == ST_STACK)
-//    {
-//        if (it.pos != local.pos)
-//        {
-//            const int reg = jitter->allocator.Allocate();
-//            vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, it.reg, it.pos);
-//            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, local.pos, reg);
-//            jitter->allocator.Free(reg);
-//
-//            local.type = it.type;
-//        }
-//    }
-//    else if (it.store == ST_REG)
-//    {
-//        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, local.pos, it.reg);
-//        jitter->allocator.Free(it.reg);
-//
-//        local.type = it.type;
-//    }
-//    else
-//    {
-//        jitter->SetError();
-//    }
-//}
-
-//static void vm_jit_push_local(Jitter* jitter)
-//{
-//    const int id = jitter->program[*jitter->pc];
-//    (*jitter->pc)++;
-//
-//    if (jitter->locals.size() > id)
-//    {
-//        auto& local = jitter->locals[id];
-//        jitter->stack.Push_Local(local.pos, local.type);
-//    }
-//    else
-//    {
-//        jitter->SetError();
-//    }
-//}
-
-//static void vm_jit_push(Jitter* jitter)
-//{
-//    unsigned char type = jitter->program[*(jitter->pc)];
-//    (*(jitter->pc))++;
-//    switch (type)
-//    {
-//    case TY_INT:
-//        {
-//            const int value = vm_jit_read_int(jitter->program, jitter->pc);
-//            const int reg = jitter->allocator.Allocate();
-//            if (reg != -1)
-//            {
-//                vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, reg, value);
-//                jitter->stack.Push_Register(reg, TY_INT);
-//            }
-//            else
-//            {
-//                // No registers free...
-//                jitter->SetError();
-//            }
-//        }
-//        break;
-//    case TY_STRING:
-//        {
-//            const char* str = (char*)&jitter->program[*jitter->pc];
-//            (*jitter->pc) += static_cast<unsigned int>(strlen(str)) + 1;
-//            
-//            const int reg = jitter->allocator.Allocate();
-//            if (reg != -1)
-//            {
-//                vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, reg, (long long)str);
-//                jitter->stack.Push_Register(reg, TY_STRING);
-//            }
-//            else
-//            {
-//                // No registers free...
-//                jitter->SetError();
-//            }
-//        }
-//        break;
-//    default:
-//        // error
-//        jitter->SetError();
-//        break;
-//    }
-//}
 
 static void vm_jit_jump(Jitter* jitter, char type, int& count, int imm)
 {
@@ -2158,8 +2004,8 @@ static void vm_jit_cmp_string(Jitter* jitter)
     const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
     const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
 
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, a1.reg);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a2.reg);
+    vm_jit_mov(jitter, a1, VM_ARG1);
+    vm_jit_mov(jitter, a2, VM_ARG2);
 
     vm_jit_call_internal_x64(jitter, (void*)strcmp);
 
@@ -2174,59 +2020,19 @@ static void vm_jit_cmp_int(Jitter* jitter)
     const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
     const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
 
-    vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, a1.reg, a2.reg);
-}
+    const int dst = vm_jit_decode_dst(a2);
+    vm_jit_mov(jitter, a2, dst);
 
-//static void vm_jit_cmp(Jitter* jitter)
-//{
-//    if (jitter->stack.Size() < 2)
-//    {
-//        jitter->SetError();
-//        return;
-//    }
-//
-//    StackItem i1;
-//    StackItem i2;
-//    jitter->stack.Peek(0, &i1);
-//    jitter->stack.Peek(1, &i2);
-//
-//    jitter->stack.Pop();
-//    jitter->stack.Pop();
-//
-//    if (i1.store == ST_REG && i2.store == ST_REG)
-//    {
-//        vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, i1.reg, i2.reg);
-//
-//        jitter->allocator.Free(i1.reg);
-//        jitter->allocator.Free(i2.reg);
-//    }
-//    else if (i1.store == ST_REG && i2.store == ST_STACK)
-//    {
-//        const int reg = jitter->allocator.Allocate();
-//        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, i2.reg, i2.pos);
-//        vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, i1.reg, reg);
-//        jitter->allocator.Free(reg);
-//        jitter->allocator.Free(i1.reg);
-//    }
-//    else if (i1.store == ST_STACK && i2.store == ST_REG)
-//    {
-//        const int reg = jitter->allocator.Allocate();
-//        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, i1.reg, i1.pos);
-//        vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, reg, i2.reg);
-//        jitter->allocator.Free(reg);
-//        jitter->allocator.Free(i2.reg);
-//    }
-//    else if(i1.store == ST_STACK && i2.store == ST_STACK)
-//    {
-//        const int reg1 = jitter->allocator.Allocate();
-//        const int reg2 = jitter->allocator.Allocate();
-//        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i1.reg, i1.pos);
-//        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg2, i2.reg, i2.pos);
-//        vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, reg1, reg2);
-//        jitter->allocator.Free(reg1);
-//        jitter->allocator.Free(reg2);
-//    }
-//}
+    switch (a1.type)
+    {
+        case ST_REG:
+            vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, a1.reg, a2.reg);
+            break;
+        case ST_STACK:
+            vm_cmp_reg_to_memory_x64(jitter->jit, jitter->count, a1.reg, a1.pos, a2.reg);
+            break;
+    }
+}
 
 static void vm_jit_exitloop(Jitter* jitter)
 {
@@ -2389,8 +2195,9 @@ static void vm_jit_append_string_int(Jitter* jitter)
     const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, a2.reg);
+
+    vm_jit_mov(jitter, a1, VM_ARG2);
+    vm_jit_mov(jitter, a2, VM_ARG3);
 
     vm_jit_call_internal_x64(jitter, (void*)vm_append_string_int);
     
@@ -2409,8 +2216,9 @@ static void vm_jit_append_int_string(Jitter* jitter)
     const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, a2.reg);
+
+    vm_jit_mov(jitter, a1, VM_ARG2);
+    vm_jit_mov(jitter, a2, VM_ARG3);
 
     vm_jit_call_internal_x64(jitter, (void*)vm_append_int_string);
 
@@ -2429,8 +2237,9 @@ static void vm_jit_append_string_string(Jitter* jitter)
     const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, a2.reg);
+    
+    vm_jit_mov(jitter, a1, VM_ARG2);
+    vm_jit_mov(jitter, a2, VM_ARG3);
 
     vm_jit_call_internal_x64(jitter, (void*)vm_append_string_string);
 
@@ -2467,72 +2276,6 @@ static void vm_jit_add_int(Jitter* jitter)
     }
 }
 
-//static void vm_jit_add(Jitter* jitter)
-//{
-//    if (jitter->stack.Size() >= 2)
-//    {
-//        StackItem i1;
-//        StackItem i2;
-//
-//        jitter->stack.Peek(0, &i1);
-//        jitter->stack.Peek(1, &i2);
-//
-//        if (i1.type == TY_INT && i2.type == TY_INT)
-//        {
-//            jitter->stack.Pop();
-//            jitter->stack.Pop();
-//
-//            if (i1.store == ST_REG && i2.store == ST_REG)
-//            {
-//                vm_add_reg_to_reg_x64(jitter->jit, jitter->count, i1.reg, i2.reg);
-//                jitter->allocator.Free(i2.reg);
-//                jitter->stack.Push_Register(i1.reg, TY_INT);
-//            }
-//            else if (i1.store == ST_REG && i2.store == ST_STACK)
-//            {
-//                vm_add_memory_to_reg_x64(jitter->jit, jitter->count, i1.reg, i2.reg, i2.pos);
-//                jitter->stack.Push_Register(i1.reg, TY_INT);
-//            }
-//            else if (i2.store == ST_REG && i1.store == ST_STACK)
-//            {
-//                vm_add_memory_to_reg_x64(jitter->jit, jitter->count, i2.reg, i1.reg, i1.pos);
-//                jitter->stack.Push_Register(i2.reg, TY_INT);
-//            }
-//            else if (i1.store == ST_STACK && i2.store == ST_STACK)
-//            {
-//                const int reg1 = jitter->allocator.Allocate();
-//
-//                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i1.reg, i1.pos);
-//                vm_add_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i2.reg, i2.pos);
-//
-//                jitter->stack.Push_Register(reg1, TY_INT);
-//            }
-//        }
-//        else if (i1.type == TY_STRING && i2.type == TY_INT)
-//        {
-//            vm_jit_call_internal_x64(jitter, 2, reinterpret_cast<void*>(vm_append_string_int), TY_STRING);
-//        }
-//        else if (i1.type == TY_INT && i2.type == TY_STRING)
-//        {
-//            vm_jit_call_internal_x64(jitter, 2, reinterpret_cast<void*>(vm_append_int_string), TY_STRING);
-//        }
-//        else if (i1.type == TY_STRING && i2.type == TY_STRING)
-//        {
-//            vm_jit_call_internal_x64(jitter, 2, reinterpret_cast<void*>(vm_append_string_string), TY_STRING);
-//        }
-//        else
-//        {
-//            // Unsupported
-//            jitter->SetError();
-//        }
-//    }
-//    else
-//    {
-//        // Error
-//        jitter->SetError();
-//    }
-//}
-
 static void vm_jit_sub_int(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
@@ -2541,63 +2284,24 @@ static void vm_jit_sub_int(Jitter* jitter)
     const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
     const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
     
-    if (a2.reg != a3.reg)
-    {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a2.reg);
-    }
-    vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg);
-}
+    const int dst = vm_jit_decode_dst(a3);
+    vm_jit_mov(jitter, a2, dst);
 
-//static void vm_jit_sub(Jitter* jitter)
-//{
-//    if (jitter->stack.Size() >= 2)
-//    {
-//        const StackItem i1 = jitter->stack.Pop();
-//        const StackItem i2 = jitter->stack.Pop();
-//
-//        if (i1.type == TY_INT && i2.type == TY_INT)
-//        {
-//            if (i1.store == ST_REG && i2.store == ST_REG)
-//            {
-//                vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, i2.reg, i1.reg);
-//                jitter->allocator.Free(i2.reg);
-//                jitter->stack.Push_Register(i1.reg, TY_INT);
-//            }
-//            else if (i1.store == ST_REG && i2.store == ST_STACK)
-//            {
-//                const int reg = jitter->allocator.Allocate();
-//                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, i2.reg, i2.pos);
-//                vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, reg, i1.reg);
-//                jitter->stack.Push_Register(reg, TY_INT);
-//                jitter->allocator.Free(i1.reg);
-//            }
-//            else if (i2.store == ST_REG && i1.store == ST_STACK)
-//            {
-//                vm_sub_memory_to_reg_x64(jitter->jit, jitter->count, i2.reg, i1.reg, i1.pos);
-//                jitter->stack.Push_Register(i2.reg, TY_INT);
-//            }
-//            else if (i1.store == ST_STACK && i2.store == ST_STACK)
-//            {
-//                const int reg1 = jitter->allocator.Allocate();
-//
-//                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i2.reg, i2.pos);
-//                vm_sub_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i1.reg, i1.pos);
-//
-//                jitter->stack.Push_Register(reg1, TY_INT);
-//            }
-//        }
-//        else
-//        {
-//            // Unsupported
-//            jitter->SetError();
-//        }
-//    }
-//    else
-//    {
-//        // Error
-//        jitter->SetError();
-//    }
-//}
+    switch (a1.type)
+    {
+        case ST_REG:
+            vm_sub_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg);
+            break;
+        case ST_STACK:
+            vm_sub_memory_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg, a1.pos);
+            break;
+    }
+
+    if (a3.type == ST_STACK)
+    {
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a3.reg, a3.pos, dst);
+    }
+}
 
 static void vm_jit_mul_int(Jitter* jitter)
 {
@@ -2625,53 +2329,6 @@ static void vm_jit_mul_int(Jitter* jitter)
         vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a3.reg, a3.pos, dst);
     }
 }
-
-//static void vm_jit_mul(Jitter* jitter)
-//{
-//    if (jitter->stack.Size() >= 2)
-//    {
-//        const StackItem i1 = jitter->stack.Pop();
-//        const StackItem i2 = jitter->stack.Pop();
-//
-//        if (i1.type == TY_INT && i2.type == TY_INT)
-//        {
-//            if (i1.store == ST_REG && i2.store == ST_REG)
-//            {
-//                vm_mul_reg_to_reg_x64(jitter->jit, jitter->count, i1.reg, i2.reg);
-//                jitter->allocator.Free(i2.reg);
-//                jitter->stack.Push_Register(i1.reg, TY_INT);
-//            }
-//            else if (i1.store == ST_REG && i2.store == ST_STACK)
-//            {
-//                vm_mul_memory_to_reg_x64(jitter->jit, jitter->count, i1.reg, i2.reg, i2.pos);
-//                jitter->stack.Push_Register(i1.reg, TY_INT);
-//            }
-//            else if (i2.store == ST_REG && i1.store == ST_STACK)
-//            {
-//                vm_mul_memory_to_reg_x64(jitter->jit, jitter->count, i2.reg, i1.reg, i1.pos);
-//                jitter->stack.Push_Register(i2.reg, TY_INT);
-//            }
-//            else if (i1.store == ST_STACK && i2.store == ST_STACK)
-//            {
-//                const int reg1 = jitter->allocator.Allocate();
-//                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i1.reg, i1.pos);
-//                vm_mul_memory_to_reg_x64(jitter->jit, jitter->count, reg1, i2.reg, i2.pos);
-//
-//                jitter->stack.Push_Register(reg1, TY_INT);
-//            }
-//        }
-//        else
-//        {
-//            // Unsupported
-//            jitter->SetError();
-//        }
-//    }
-//    else
-//    {
-//        // Error
-//        jitter->SetError();
-//    }
-//}
 
 static void vm_jit_div_int(Jitter* jitter)
 {
@@ -2719,49 +2376,7 @@ static void vm_jit_dec_int(Jitter* jitter)
     {
         vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a2.reg, a2.pos, dst);
     }
-
-    //if (a1.type == ST_REG)
-    //{
-    //    // TODO: workaround until register is preserved
-    //    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a1.reg, dst);
-    //}
 }
-
-//static void vm_jit_dec(Jitter* jitter)
-//{
-//    if (jitter->stack.Size() >= 1)
-//    {
-//        const StackItem item = jitter->stack.Pop();
-//        if (item.type == TY_INT)
-//        {
-//            if (item.store == ST_REG)
-//            {
-//                vm_dec_reg_x64(jitter->jit, jitter->count, item.reg);
-//                jitter->stack.Push_Register(item.reg, item.type);
-//            }
-//            else if (item.store == ST_STACK)
-//            {
-//                vm_dec_memory_x64(jitter->jit, jitter->count, item.reg, item.pos);
-//                jitter->stack.Push_Local(item.pos, item.type);
-//            }
-//            else
-//            {
-//                // Unsupported
-//                jitter->SetError();
-//            }
-//        }
-//        else
-//        {
-//            // Unsupported
-//            jitter->SetError();
-//        }
-//    }
-//    else
-//    {
-//        // Error
-//        jitter->SetError();
-//    }
-//}
 
 static void vm_jit_inc_int(Jitter* jitter)
 {
@@ -2780,83 +2395,22 @@ static void vm_jit_inc_int(Jitter* jitter)
     }
 }
 
-//static void vm_jit_inc(Jitter* jitter)
-//{
-//    if (jitter->stack.Size() >= 1)
-//    {
-//        const StackItem item = jitter->stack.Pop();
-//        if (item.type == TY_INT)
-//        {
-//            if (item.store == ST_REG)
-//            {
-//                vm_inc_reg_x64(jitter->jit, jitter->count, item.reg);
-//                jitter->stack.Push_Register(item.reg, item.type);
-//            }
-//            else if (item.store == ST_STACK)
-//            {
-//                vm_inc_memory_x64(jitter->jit, jitter->count, item.reg, item.pos);
-//                jitter->stack.Push_Local(item.pos, item.type);
-//            }
-//            else
-//            {
-//                // Unsupported
-//                jitter->SetError();
-//            }
-//        }
-//        else
-//        {
-//            // Unsupported
-//            jitter->SetError();
-//        }
-//    }
-//    else
-//    {
-//        // Error
-//        jitter->SetError();
-//    }
-//}
-
 static void vm_jit_neg_int(Jitter* jitter)
 {
     const int ref = vm_jit_read_int(jitter->program, jitter->pc);
     const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref);
     const JIT_Allocation a2 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    vm_neg_reg_x64(jitter->jit, jitter->count, a1.reg);
-    if (a1.reg != a2.reg)
+    const int dst = vm_jit_decode_dst(a2);
+    vm_jit_mov(jitter, a1, dst);
+
+    vm_neg_reg_x64(jitter->jit, jitter->count, dst);
+
+    if (a2.type == ST_STACK)
     {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a2.reg, a1.reg);
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a2.reg, a2.pos, dst);
     }
 }
-
-//static void vm_jit_neg(Jitter* jitter)
-//{
-//    if (jitter->stack.Size() >= 1)
-//    {
-//        const StackItem item = jitter->stack.Pop();
-//        if (item.type == TY_INT)
-//        {
-//            if (item.store == ST_REG)
-//            {
-//                vm_neg_reg_x64(jitter->jit, jitter->count, item.reg);
-//                jitter->stack.Push_Register(item.reg, item.type);
-//            }
-//            else if (item.store == ST_STACK)
-//            {
-//                const int reg = jitter->allocator.Allocate();
-//                vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, reg, item.reg, item.pos);
-//
-//                vm_neg_reg_x64(jitter->jit, jitter->count, reg);
-//                jitter->stack.Push_Register(reg, item.type);
-//            }
-//        }
-//        else
-//        {
-//            // Error
-//            jitter->SetError();
-//        }
-//    }
-//}
 
 static void vm_jit_load_string(Jitter* jitter)
 {
@@ -3630,7 +3184,7 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     //std::cout << std::endl;
     //===============================
     
-    JIT_DumpTrace(trace, size);
+    //JIT_DumpTrace(trace, size);
 
     std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
     jitter->program = trace;
