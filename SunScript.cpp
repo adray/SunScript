@@ -444,10 +444,14 @@ inline static void Trace_LoadC_String(VirtualMachine* vm, const char* str)
     vm->tr.ref++;
 }
 
-inline static void Trace_ReturnValue(VirtualMachine* vm)
+inline static void Trace_ReturnValue(VirtualMachine* vm, int type)
 {
     // Push the ref which has pushed onto the stack by the function call.
     vm->tr.refs.push_back(vm->tr.nodes[vm->tr.ref - 1]);
+
+    // Patch The return type.
+    TraceNode* node = vm->tr.nodes.at(vm->tr.nodes.size() - 1);
+    vm->trace[node->pos + 6] = type;
 }
 
 inline static void Trace_Push_Local(VirtualMachine* vm, int local)
@@ -490,6 +494,7 @@ inline static void Trace_Call(VirtualMachine* vm, int call, int args)
     vm->trace.push_back(IR_CALL);
     Trace_Int(vm, call);
     vm->trace.push_back(args);
+    vm->trace.push_back(TY_VOID);
     vm->tr.ref++;
 }
 
@@ -500,6 +505,7 @@ inline static void Trace_Yield(VirtualMachine* vm, int call, int args)
     vm->trace.push_back(IR_YIELD);
     Trace_Int(vm, call);
     vm->trace.push_back(args);
+    vm->trace.push_back(TY_VOID);
     vm->tr.ref++;
 }
 
@@ -2182,7 +2188,7 @@ void SunScript::PushReturnValue(VirtualMachine* vm, const std::string& value)
     if (vm->statusCode == VM_OK)
     {
         Push_String(vm, value.c_str());
-        if (vm->tracing) { Trace_ReturnValue(vm); }
+        if (vm->tracing) { Trace_ReturnValue(vm, TY_STRING); }
     }
 }
 
@@ -2191,7 +2197,7 @@ void SunScript::PushReturnValue(VirtualMachine* vm, int value)
     if (vm->statusCode == VM_OK)
     {
         Push_Int(vm, value);
-        if (vm->tracing) { Trace_ReturnValue(vm); }
+        if (vm->tracing) { Trace_ReturnValue(vm, TY_INT); }
     }
 }
 

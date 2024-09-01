@@ -1470,8 +1470,9 @@ void JIT_Analyzer::AllocateRegister(int ref, int start, int end)
    // Allocate a new place on the stack instead
     if (!ok)
     {
+        const int size = StackSize() * 8 + 32;
         JIT_Analyzer::Allocation& allocation = allocations.emplace_back();
-        allocation.Initialize(32);
+        allocation.Initialize(size);
         allocation.Insert(ref, start, end);
     }
 }
@@ -1514,6 +1515,7 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             vm_jit_read_int(ir, &pc);
             {
                 const int numArgs = ir[pc++];
+                ir[pc++]; // type
                 for (int i = 0; i < numArgs; i++)
                 {
                     pc++; // skip type
@@ -1674,10 +1676,6 @@ public:
     unsigned char* jit;
     int count;
     unsigned int* pc;
-    //RegisterAllocator allocator;
-    //VirtualStack stack;
-    //std::vector<Local> locals;
-    //JIT_FlowGraph fg;
     JIT_Trace* _trace;
     JIT_Manager* _manager;
     JIT_Analyzer analyzer;
@@ -1808,7 +1806,7 @@ extern "C"
         PushParamString(vm, value);
     }
 
-    static void* vm_call_stub(VirtualMachine* vm, char* name, const int numArgs)
+    static void* vm_call_stub(VirtualMachine* vm, MemoryManager* mm, char* name, const int numArgs)
     {
         InvokeHandler(vm, name, numArgs);
 
@@ -1816,26 +1814,25 @@ extern "C"
         std::string val;
         if (GetParamInt(vm, &retInt) == VM_OK)
         {
-            return (void*)(long long)retInt;
+            int* data = (int*)mm->New(sizeof(retInt), TY_INT);
+            *data = retInt;
+            return data;
         }
         else if (GetParamString(vm, &val) == VM_OK)
         {
-            // TODO: this should use the memory manager
-            char* copy = new char[val.size() + 1];
+            char* copy = (char*)mm->New(val.size() + 1, TY_STRING);
             std::memcpy(copy, val.c_str(), val.size());
             copy[val.size()] = 0;
             return copy;
         }
 
-        return 0;
+        return nullptr;
     }
 
-    //static void* vm_box_int(JIT_Manager* man, int value)
-    //{
-    //    int* mem = (int*)man->_mm.New(sizeof(int64_t), TY_INT);
-    //    *mem = value;
-    //    return mem;
-    //}
+    static int vm_check_type(MemoryManager* mm, void* obj, int type)
+    {
+        return mm->GetType(obj) == type ? VM_OK : VM_ERROR;
+    }
 
     static char* vm_append_string_int(MemoryManager* mm, char* left, int right)
     {
@@ -2488,21 +2485,11 @@ static void vm_jit_call_x64(VirtualMachine* vm, Jitter* jitter, int numParams, c
     // Store the VM pointer in ARG1.
     // We do this each time in case the register is cleared.
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)vm);
-
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, (long long)name);
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, numParams);
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG4, (long long)vm_call_stub);
-    vm_call_absolute(jitter->jit, jitter->count, VM_ARG4);
-
-    // TODO: handle return value; we simply need to check the
-    // return value is the type we are expecting to get back.
-    // Otherwise abort the trace.
-
-    const JIT_Allocation dst = jitter->analyzer.GetAllocation(jitter->refIndex);
-    if (dst.reg != VM_REGISTER_EAX)
-    {
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, dst.reg, VM_REGISTER_EAX);
-    }
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, (long long)&jitter->_manager->_mm);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, (long long)name);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG4, numParams);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, (long long)vm_call_stub);
+    vm_call_absolute(jitter->jit, jitter->count, VM_REGISTER_EAX);
 }
 
 static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
@@ -2511,11 +2498,63 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
 
     const int numParams = jitter->program[*jitter->pc];
     (*jitter->pc)++;
-    
+
+    const int type = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
+
     const char* name = FindFunctionName(vm, id);
     assert(name);
 
     vm_jit_call_x64(vm, jitter, numParams, name);
+
+    // Handle return value; we need to check the
+    // return value is the type we are expecting to get back.
+    // Otherwise abort the trace.
+
+    JIT_Allocation al = jitter->analyzer.GetAllocation(jitter->refIndex);
+    switch (al.type)
+    {
+    case ST_STACK:
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, VM_REGISTER_EAX);
+        break;
+    case ST_REG:
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
+        break;
+    }
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_manager->_mm);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, VM_REGISTER_EAX);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, type);
+    vm_jit_call_internal_x64(jitter, vm_check_type);
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_ERROR);  // use Arg1 to hold this
+    vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_REGISTER_EAX);
+    
+    JIT_ExitJump& exit = jitter->_trace->_exitJumps.emplace_back();
+    exit._type = JUMP_E;
+    exit._offset = jitter->count;
+    exit._state = PATCH_INITIALIZED;
+    exit._pos = *jitter->pc;
+
+    vm_jump_equals(jitter->jit, jitter->count, 0); // patch
+
+    exit._size = jitter->count - exit._offset;
+
+    // Unbox
+
+    int dst;
+    switch (type)
+    {
+    case TY_INT:
+        dst = vm_jit_decode_dst(al);
+        vm_jit_mov(jitter, al, dst);
+        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, dst, 0); // de-reference
+        if (al.type == ST_STACK)
+        {
+            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, dst);
+        }
+        break;
+    }
 }
 
 static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
@@ -2523,7 +2562,10 @@ static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
     const int id = vm_jit_read_int(jitter->program, jitter->pc);
 
     const int numParams = jitter->program[*jitter->pc];
-    (*jitter->pc)++;    
+    (*jitter->pc)++;
+
+    const int type = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
     
     const char* name = FindFunctionName(vm, id);
     assert(name);
@@ -2571,69 +2613,6 @@ inline static void vm_jit_epilog(Jitter* jitter, const int stacksize)
         vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_R12);
     }
 }
-
-//static void vm_jit_box(Jitter* jitter)
-//{
-//    StackItem item;
-//    jitter->stack.Peek(0, &item);
-//
-//    if (item.store == ST_REG)
-//    {
-//        switch (item.type)
-//        {
-//        case TY_INT:
-//            vm_jit_call_internal_x64(jitter, 1, (void*)&vm_box_int, TY_OBJECT);
-//            break;
-//        }
-//    }
-//    else if (item.store == ST_STACK)
-//    {
-//        switch (item.type)
-//        {
-//        case TY_INT:
-//            vm_jit_spill_register(jitter, VM_REGISTER_EDX);
-//            vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EDX, item.reg, item.pos);
-//            jitter->stack.Push_Register(VM_REGISTER_EDX, TY_OBJECT);
-//
-//            vm_jit_call_internal_x64(jitter, 1, (void*)&vm_box_int, TY_OBJECT);
-//            break;
-//        }
-//    }
-//}
-
-//static void vm_jit_return(Jitter* jitter, const int stacksize)
-//{
-//    // Handle return value
-//    if (jitter->stack.Size() > 0)
-//    {
-//        vm_jit_box(jitter);
-//
-//        StackItem item = jitter->stack.Pop();
-//
-//        if (item.store == ST_REG)
-//        {
-//            if (item.reg != VM_REGISTER_EAX)
-//            {
-//                vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, item.reg);
-//            }
-//        }
-//        else if (item.store == ST_STACK)
-//        {
-//            vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, VM_REGISTER_ESP, item.pos);
-//        }
-//    }
-//
-//    vm_jit_epilog(jitter, stacksize);
-//    vm_return(jitter->jit, jitter->count);
-//}
-
-//static void vm_jit_pop_discard(Jitter* jitter)
-//{
-//    if (jitter->stack.Size() > 0)
-//    {
-//        jitter->stack.Pop();
-//    }
-//}
 
 static void vm_jit_phi(VirtualMachine* vm, Jitter* jitter)
 {
@@ -3062,6 +3041,7 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
     int ref = 0;
     int op1 = 0;
     int op2 = 0;
+    int op3 = 0;
     short offset = 0;
     while (pc < size)
     {
@@ -3093,8 +3073,9 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
         case IR_CALL:
         case IR_YIELD:
             op1 = vm_jit_read_int(trace, &pc);
-            op2 = trace[pc++]; 
-            std::cout << " IR_CALL " << op1 << " " << op2;
+            op2 = trace[pc++]; // num args
+            op3 = trace[pc++]; // type
+            std::cout << " IR_CALL " << op1 << " " << op2 << " " << op3;
             {
                 for (int i = 0; i < op2; i++)
                 {
