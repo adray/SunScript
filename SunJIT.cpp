@@ -2525,7 +2525,7 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_manager->_mm);
     vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, VM_REGISTER_EAX);
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, type);
-    vm_jit_call_internal_x64(jitter, vm_check_type);
+    vm_jit_call_internal_x64(jitter, (void*)vm_check_type);
 
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_ERROR);  // use Arg1 to hold this
     vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_REGISTER_EAX);
