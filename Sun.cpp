@@ -1974,6 +1974,7 @@ void SunScript::CompileFile(const std::string& filepath,
 
 #ifdef _SUN_EXECUTABLE_
 #include <iostream>
+#include <cstring>
 #include "SunScriptDemo.h"
 #include "Tests/SunTest.h"
     static void PrintHelp()
@@ -2042,6 +2043,20 @@ void SunScript::CompileFile(const std::string& filepath,
         }
     }
 
+    int GetOpts(int numArgs, char** args)
+    {
+        int opt = OPT_NONE;
+        for (int i = 0; i < numArgs; i++)
+        {
+            if (std::strcmp(args[i], "--trace") == 0)
+            {
+                opt |= OPT_DUMPTRACE;
+                std::cout << "Dumping trace: on" << std::endl;
+            }
+        }
+        return opt;
+    }
+
     int main(int numArgs, char** args)
     {
         if (numArgs <= 1)
@@ -2070,13 +2085,14 @@ void SunScript::CompileFile(const std::string& filepath,
             }
             else if (cmd == "test")
             {
+                const int opts = GetOpts(numArgs, args);
                 if (numArgs <= 2)
                 {
-                    RunTestSuite(".");
+                    RunTestSuite(".", opts);
                 }
                 else
                 {
-                    RunTestSuite(args[2]);
+                    RunTestSuite(args[2], opts);
                 }
             }
             else if (cmd == "demo")

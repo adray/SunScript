@@ -2980,28 +2980,7 @@ void SunScript::JIT_Free(void* data)
     vm_free(trace->_jit_data, trace->_size);
 }
 
-/*static std::string JIT_Method_Stats(JIT_Method* method)
-{
-    int numPatchesApplied = 0;
-    for (auto& stub : method->_stubs)
-    {
-        if (stub._patch._state == PATCH_APPLIED)
-        {
-            numPatchesApplied++;
-        }
-    }
-
-    std::stringstream ss;
-    ss << "Name: " << method->_id << std::endl;
-    ss << "Signature: (" << method->_signature << ")" << std::endl;
-    ss << "Cache Key: " << method->_cacheKey << std::endl;
-    ss << "Patches Applied: " << numPatchesApplied << "/" << method->_stubs.size() << std::endl;
-    ss << "Compile Time: " << (method->_endTime - method->_startTime) << "ns" << std::endl;
-    ss << "Runs: " << method->_runCount;
-
-    return ss.str();
-}
-
+/*
 std::string SunScript::JIT_Stats(void* data)
 {
     JIT_Manager* man = reinterpret_cast<JIT_Manager*>(data);
@@ -3157,25 +3136,13 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     unsigned char* jit = new unsigned char [1024 * 3];
     unsigned int pc = 0;
 
-    // =================================
-    //for (int i = 0; i < size; i++)
-    //{
-    //std::cout << int(trace[i]) << " ";
-    //}
-    //std::cout << std::endl;
-    //===============================
-    
-    //JIT_DumpTrace(trace, size);
-
     std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
     jitter->program = trace;
     jitter->pc = &pc;
     jitter->size = size;
     jitter->jit = jit;
     jitter->info = nullptr; //info;
-    //jitter->locals.resize(128/*info->locals.size() + info->parameters.size()*/);
     jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
-    //jitter->fg.Init(jitter->program, pc, size);
 
     jitter->_trace = new JIT_Trace();
     jitter->_trace->_id = 0; //info->name; 

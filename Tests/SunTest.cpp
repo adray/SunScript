@@ -34,6 +34,10 @@ public:
 class SunTestSuite
 {
 public:
+    SunTestSuite() : _numFailures(0), _dumpTrace(false) {}
+
+    inline void EnableDumpTrace(bool enabled) { _dumpTrace = enabled; }
+    
     void AddTest(const std::string& filename)
     {
         _tests.push_back(SunTest(filename, false));
@@ -52,10 +56,12 @@ public:
     }
 
     int NumFailures() const { return _numFailures; }
+    bool DumpTrace() const { return _dumpTrace; }
 
 private:
     std::vector<SunTest> _tests;
     int _numFailures;
+    bool _dumpTrace;
 };
 
 static int Handler(VirtualMachine* vm)
@@ -115,6 +121,13 @@ static void DumpStack(Callstack* s)
     }
 }
 
+static void* CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size)
+{
+    JIT_DumpTrace(trace, size);
+
+    return JIT_CompileTrace(instance, vm, trace, size);
+}
+
 static int RunTest(SunTestSuite* suite, SunTest* test)
 {
     std::cout << "Running test for " << test->_filename;
@@ -127,6 +140,10 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     {
         Jit jit;
         JIT_Setup(&jit);
+        if (suite->DumpTrace())
+        {
+            jit.jit_compile_trace = CompileTrace;
+        }
         SetJIT(vm, &jit);
     }
 
@@ -190,11 +207,12 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     }
 }
 
-void SunScript::RunTestSuite(const std::string& directory)
+void SunScript::RunTestSuite(const std::string& directory, int opts)
 {
     std::cout << "Running test suite" << std::endl;
 
     SunTestSuite* suite = new SunTestSuite();
+    suite->EnableDumpTrace(opts & OPT_DUMPTRACE);
     std::filesystem::directory_iterator it(directory);
     for (auto& entry : it)
     {
