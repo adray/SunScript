@@ -978,7 +978,7 @@ bool JIT_BitField::GetBit(const int pos)
 // Flow graph
 //==================================
 
-static void ConsumeInstruction(unsigned char* ins, unsigned int& pc)
+/*static void ConsumeInstruction(unsigned char* ins, unsigned int& pc)
 {
     char type;
 
@@ -1185,7 +1185,7 @@ void JIT_FlowGraph::ProcessBlocks()
         node->CreateEdge();
         node = node->Next();
     }
-}
+}*/
 
 //==================================
 
@@ -1544,6 +1544,9 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             p1 = vm_jit_read_int(ir, &pc);
             p2 = vm_jit_read_int(ir, &pc);
             break;
+        case IR_SNAP:
+            pc++;
+            break;
         }
 
         if (p1 > -1 && p1 < ref) { liveness[p1] = std::max(liveness[p1], ref - p1); }
@@ -1679,7 +1682,6 @@ public:
     JIT_Trace* _trace;
     JIT_Manager* _manager;
     JIT_Analyzer analyzer;
-    FunctionInfo* info;
     int size;
     int refIndex;
     int argsProcessed;
@@ -1697,8 +1699,7 @@ public:
         argsProcessed(0),
         size(0),
         refIndex(0),
-        _manager(nullptr),
-        info(nullptr)
+        _manager(nullptr)
     {
     }
 
@@ -2737,6 +2738,10 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_PHI:
             vm_jit_phi(vm, jitter);
             break;
+        case IR_SNAP:
+            // TODO
+            (*jitter->pc)++;
+            break;
         default:
             abort();
         }
@@ -2934,13 +2939,9 @@ static void vm_jit_entry_stub(JIT_Manager* manager)
 void SunScript::JIT_Setup(Jit* jit)
 {
     jit->jit_initialize = SunScript::JIT_Initialize;
-    //jit->jit_compile = SunScript::JIT_Compile;
     jit->jit_compile_trace = SunScript::JIT_CompileTrace;
     jit->jit_execute = SunScript::JIT_ExecuteTrace;
     jit->jit_resume = SunScript::JIT_Resume;
-    //jit->jit_search_cache = SunScript::JIT_SearchCache;
-    //jit->jit_cache = SunScript::JIT_CacheData;
-    //jit->jit_stats = SunScript::JIT_Stats;
     jit->jit_shutdown = SunScript::JIT_Shutdown;
 }
 
@@ -3123,6 +3124,10 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
         case IR_PHI:
             std::cout << " IR_PHI " << vm_jit_read_int(trace, &pc) << " " << vm_jit_read_int(trace, &pc) << std::endl;
             break;
+        case IR_SNAP:
+            op1 = trace[pc++];
+            std::cout << " IR_SNAP " << op1 << std::endl;
+            break;
         default:
             std::cout << " UNKOWN" << std::endl;
         }
@@ -3141,11 +3146,10 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     jitter->pc = &pc;
     jitter->size = size;
     jitter->jit = jit;
-    jitter->info = nullptr; //info;
     jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
 
     jitter->_trace = new JIT_Trace();
-    jitter->_trace->_id = 0; //info->name; 
+    jitter->_trace->_id = 0; 
     jitter->_trace->_runCount = 0;
     jitter->_trace->_jumpPos = 0;
 

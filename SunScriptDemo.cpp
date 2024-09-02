@@ -229,11 +229,6 @@ static void RunDemoScript(const std::string& filename, const std::string& str, b
                 {
                     std::cout << "Script completed." << std::endl;
                 }
-
-                if (jit_enabled)
-                {
-                    std::cout << SunScript::JITStats(vm) << std::endl;
-                }
             }
 
             ShutdownVirtualMachine(vm);

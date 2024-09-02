@@ -78,6 +78,7 @@ namespace SunScript
     constexpr unsigned char IR_LOOPSTART = 0x61;
     constexpr unsigned char IR_LOOPEXIT = 0x62;
     constexpr unsigned char IR_PHI = 0x63;
+    constexpr unsigned char IR_SNAP = 0x64;
 
     struct VirtualMachine;
     struct Program;
@@ -130,61 +131,15 @@ namespace SunScript
 
         Callstack* next = nullptr;
     };
-
-    struct LoopStat
-    {
-        unsigned int pc;
-        int offset;
-    };
-
-    struct ReturnStat
-    {
-        unsigned int pc;
-        unsigned int type;
-        unsigned int count;
-    };
-
-    struct BranchStat
-    {
-        unsigned int pc;
-        unsigned int trueCount;
-        unsigned int falseCount;
-    };
-
-    struct Statistics
-    {
-        unsigned int retCount;
-        unsigned int branchCount;
-        unsigned int loopCount;
-        ReturnStat retStats[8];
-        BranchStat branchStats[8];
-        LoopStat loopStats[8];
-    };
-
-    struct FunctionInfo
-    {
-        unsigned int pc;
-        unsigned int size;
-        unsigned int counter;
-        unsigned int depth;
-        Statistics stats;
-        std::string name;
-        std::vector<std::string> parameters;
-        std::vector<std::string> locals;
-        std::vector<int> labels;
-    };
+    
+    struct FunctionInfo;
 
     struct Jit
     {
         void* (*jit_initialize) (void);
-        void* (*jit_compile) (void* instance, VirtualMachine* vm, unsigned char* program, 
-            FunctionInfo* info, const std::string& signature);
         void* (*jit_compile_trace) (void* instance, VirtualMachine* vm, unsigned char* trace, int size);
         int (*jit_execute) (void* instance, void* data);
         int (*jit_resume) (void* instance);
-        void* (*jit_search_cache) (void* instance, const std::string& key);
-        int (*jit_cache) (void* instance, const std::string& key, void* data);
-        std::string(*jit_stats) (void* data);
         void (*jit_shutdown) (void* instance);
     };
 
@@ -231,11 +186,6 @@ namespace SunScript
     * This function sets the handlers for JIT compilation. 
     */
     void SetJIT(VirtualMachine* vm, Jit* jit);
-
-    /*
-    * Retrieve data collected by the JIT compilier.
-    */
-    std::string JITStats(VirtualMachine* vm);
 
     /*
     * Gets user data associated with the Virtual Machine.

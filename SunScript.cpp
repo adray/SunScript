@@ -168,6 +168,51 @@ namespace SunScript
         return _array[--_pos];
     }
 
+//===========================
+
+    struct LoopStat
+    {
+        unsigned int pc;
+        int offset;
+    };
+
+    struct ReturnStat
+    {
+        unsigned int pc;
+        unsigned int type;
+        unsigned int count;
+    };
+
+    struct BranchStat
+    {
+        unsigned int pc;
+        unsigned int trueCount;
+        unsigned int falseCount;
+    };
+
+    struct Statistics
+    {
+        unsigned int retCount;
+        unsigned int branchCount;
+        unsigned int loopCount;
+        ReturnStat retStats[8];
+        BranchStat branchStats[8];
+        LoopStat loopStats[8];
+    };
+
+    struct FunctionInfo
+    {
+        unsigned int pc;
+        unsigned int size;
+        unsigned int counter;
+        unsigned int depth;
+        Statistics stats;
+        std::string name;
+        std::vector<std::string> parameters;
+        std::vector<std::string> locals;
+        std::vector<int> labels;
+    };
+
 //============================
 
     struct StackFrame
@@ -191,6 +236,19 @@ namespace SunScript
         int id;
         int blk;
         std::string name;
+    };
+
+    struct TraceSnapshot
+    {
+        struct Local
+        {
+            int ref;
+            int index;  // index to locals
+        };
+
+        unsigned int pc;
+        std::vector<FunctionInfo*> frames;
+        std::vector<Local> locals;
     };
 
     struct TraceNode
@@ -228,10 +286,11 @@ namespace SunScript
     {
         MemoryManager mm;
         std::vector<TraceNode*> nodes;
-        std::vector<TraceLoop> loop;    // loops
-        std::vector<TraceNode*> locals; // local -> ref mapping
-        std::vector<TraceNode*> refs;   // stack of refs
-        int ref;                        // current ref index
+        std::vector<TraceLoop> loop;        // loops
+        std::vector<TraceNode*> locals;     // local -> ref mapping
+        std::vector<TraceNode*> refs;       // stack of refs
+        std::vector<TraceSnapshot> snaps;
+        int ref;                            // current ref index
     };
 
     struct VirtualMachine
@@ -259,7 +318,7 @@ namespace SunScript
         MemoryManager mm;
         FunctionInfo* main;
         std::string callName;
-        std::stack<StackFrame> frames;
+        std::vector<StackFrame> frames;
         Stack stack;
         std::vector<Block> blocks;
         std::vector<Function> functions;
@@ -703,25 +762,52 @@ inline static void Trace_Unary_Minus_Int(VirtualMachine* vm)
     vm->tr.ref++;
 }
 
+inline static void Trace_Snap(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_CreateNode(vm);
+
+    TraceSnapshot& snap = vm->tr.snaps.emplace_back();
+    snap.pc = vm->programCounter;
+    for (auto& frame : vm->frames)
+    {
+        snap.frames.push_back(frame.func);
+    }
+    for (size_t i = 0; i < vm->tr.locals.size(); i++)
+    {
+        TraceNode* node = vm->tr.locals[i];
+
+        if (node)
+        {
+            auto& local = snap.locals.emplace_back();
+            local.index = int(i);
+            local.ref = node->ref;
+        }
+    }
+
+    vm->trace.push_back(IR_SNAP);
+    vm->trace.push_back(char(vm->tr.snaps.size() - 1));
+    vm->tr.ref++;
+}
+
 //===================
 
 Callstack* SunScript::GetCallStack(VirtualMachine* vm)
 {
     Callstack* stack = new Callstack();
     Callstack* tail = stack;
-    std::stack<StackFrame> frames(vm->frames);
-
+    
+    size_t id = vm->frames.size() - 1;
     int pc = vm->programCounter;
     int debugLine = vm->debugLine;
-    while (frames.size() > 0)
+    while (id > 0)
     {
-        auto& frame = frames.top();
+        auto& frame = vm->frames[id];
         tail->functionName = frame.functionName;
         tail->numArgs = int(frame.func->parameters.size());
         tail->debugLine = debugLine;
         tail->programCounter = pc;
         
-        frames.pop();
+        id--;
         debugLine = frame.debugLine;
         pc = frame.returnAddress;
         tail->next = new Callstack();
@@ -783,16 +869,6 @@ void SunScript::SetJIT(VirtualMachine* vm, Jit* jit)
     {
         vm->jit_instance = vm->jit.jit_initialize();
     }
-}
-
-std::string SunScript::JITStats(VirtualMachine* vm)
-{
-    if (vm->jit.jit_stats)
-    {
-        return vm->jit.jit_stats(vm->jit_instance);
-    }
-
-    return "";
 }
 
 void* SunScript::GetUserData(VirtualMachine* vm)
@@ -996,7 +1072,7 @@ static void Op_Return(VirtualMachine* vm)
         return;
     }
 
-    StackFrame& frame = vm->frames.top();
+    StackFrame& frame = vm->frames[vm->frames.size() - 1];
 
     // Record stats
     if (vm->stack.size() > 0)
@@ -1015,7 +1091,7 @@ static void Op_Return(VirtualMachine* vm)
 
     vm->stackBounds = frame.stackBounds;
     vm->localBounds = frame.localBounds;
-    vm->frames.pop();
+    vm->frames.resize(vm->frames.size() - 1);
     vm->programCounter = frame.returnAddress;
 }
 
@@ -1048,7 +1124,7 @@ static void Op_Call(VirtualMachine* vm)
         if (blk.numArgs == numArgs)
         {
             const int address = blk.info.pc + vm->programOffset;
-            StackFrame& frame = vm->frames.emplace();
+            StackFrame& frame = vm->frames.emplace_back();
             frame.functionName = vm->callName;
             frame.debugLine = vm->debugLine;
             frame.func = &blk.info;
@@ -1701,7 +1777,7 @@ static void Op_Jump(VirtualMachine* vm)
     // Record branch stats
     if (vm->frames.size() > 0)
     {
-        const auto& frame = vm->frames.top();
+        const auto& frame = vm->frames[vm->frames.size()-1];
         RecordBranch(frame.func, pc, branchDir);
         
         // Record a loop
@@ -1747,6 +1823,8 @@ static void Op_Jump(VirtualMachine* vm)
         }
         else if (type != JUMP)
         {
+            Trace_Snap(vm);
+
             if (branchDir)
             {
                 Trace_Guard(vm, Flip(type));
@@ -1846,7 +1924,7 @@ static void ResetVM(VirtualMachine* vm)
     vm->callNumArgs = 0;
     vm->resumeCode = VM_OK;
     while (!vm->stack.empty()) { vm->stack.pop(); }
-    while (!vm->frames.empty()) { vm->frames.pop(); }
+    vm->frames.clear();
     vm->locals.clear();
 }
 

@@ -7,16 +7,14 @@
 namespace SunScript
 {
     struct VirtualMachine;
-    struct FunctionInfo;
     struct Jit;
 
     void JIT_Setup(Jit* jit);
     void* JIT_Initialize();
+    void JIT_DumpTrace(unsigned char* trace, unsigned int size);
+    void* JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size);
     int JIT_ExecuteTrace(void* instance, void* data);
     int JIT_Resume(void* instance);
     void JIT_Free(void* data);
     void JIT_Shutdown(void* instance);
-
-    void JIT_DumpTrace(unsigned char* trace, unsigned int size);
-    void* JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size);
 }
