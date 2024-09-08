@@ -1,5 +1,6 @@
 // Test we can recover from a guard failure.
 
+var k = 17;
 var p = Rnd(10);
 var q = 0;
 
@@ -19,3 +20,5 @@ function magic() {
 
 var x = magic();
 x = x + q;
+
+assert(17, k);

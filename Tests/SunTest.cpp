@@ -123,7 +123,10 @@ static void DumpStack(Callstack* s)
 
 static void* CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size)
 {
+    const std::string line = "=======================";
+    std::cout << std::endl << line << std::endl;
     JIT_DumpTrace(trace, size);
+    std::cout << line << std::endl;
 
     return JIT_CompileTrace(instance, vm, trace, size);
 }

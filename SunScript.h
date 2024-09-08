@@ -79,10 +79,29 @@ namespace SunScript
     constexpr unsigned char IR_LOOPEXIT = 0x62;
     constexpr unsigned char IR_PHI = 0x63;
     constexpr unsigned char IR_SNAP = 0x64;
+    constexpr unsigned char IR_UNBOX = 0x65;
 
     struct VirtualMachine;
     struct Program;
     struct ProgramBlock;
+
+    class Snapshot
+    {
+    private:
+        struct Value
+        {
+            int _ref;
+            int64_t _value;
+        };
+
+    public:
+        void Add(int ref, int64_t value);
+        void Get(int idx, int* ref, int64_t* value) const;
+        inline size_t Count() const { return _values.size(); }
+
+    private:
+        std::vector<Value> _values;
+    };
 
     class MemoryManager
     {
@@ -108,8 +127,9 @@ namespace SunScript
         void Dump();
         void AddRef(void* mem);
         void Release(void* mem);
-        char GetType(void* mem);
+        char GetType(void* mem) const;
         void Reset();
+        static char GetTypeUnsafe(void* mem);
         ~MemoryManager();
 
     private:
@@ -215,6 +235,8 @@ namespace SunScript
 
     int ResumeScript(VirtualMachine* vm);
 
+    int RestoreSnapshot(VirtualMachine* vm, const Snapshot& snap, int number, int ref);
+
     void PushReturnValue(VirtualMachine* vm, const std::string& value);
     
     void PushReturnValue(VirtualMachine* vm, int value);
@@ -222,6 +244,8 @@ namespace SunScript
     int GetCallNumArgs(VirtualMachine* vm, int* numArgs);
 
     int GetCallName(VirtualMachine* vm, std::string* name);
+
+    int GetParam(VirtualMachine* vm, void** param);
 
     int GetParamInt(VirtualMachine* vm, int* param);
 

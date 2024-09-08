@@ -178,7 +178,7 @@ struct vm_instruction
 
 #define VMI_UNUSED 0xFF
 
-static vm_instruction gInstructions[VMI_MAX_INSTRUCTIONS] = {
+static constexpr vm_instruction gInstructions[VMI_MAX_INSTRUCTIONS] = {
     INS(0x48, 0x1, VMI_UNUSED, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_MR),     // VMI_ADD64_SRC_REG_DST_REG
     INS(0x48, 0x81, 0x0, VM_INSTRUCTION_BINARY, CODE_BRI, VMI_ENC_MI),    // VMI_ADD64_SRC_IMM_DST_REG
     INS(0x48, 0x3, VMI_UNUSED, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_RM),    // VMI_ADD64_SRC_MEM_DST_REG
@@ -504,6 +504,15 @@ static void vm_return(unsigned char* program, int& count)
     //vm_emit(table.ret, program, count);
 
     vm_emit(gInstructions[VMI_NEAR_RETURN], program, count);
+}
+
+static void vm_push_32(unsigned char* program, int& count, const int imm)
+{
+    program[count++] = 0x68;
+    program[count++] = (unsigned char)(imm & 0xFF);
+    program[count++] = (unsigned char)((imm >> 8) & 0xFF);
+    program[count++] = (unsigned char)((imm >> 16) & 0xFF);
+    program[count++] = (unsigned char)((imm >> 24) & 0xFF);
 }
 
 static void vm_push_reg(unsigned char* program, int& count, char reg)
@@ -1199,6 +1208,12 @@ struct JIT_Allocation
     unsigned int pos;
 };
 
+struct JIT_LiveValue
+{
+    unsigned int ref;
+    JIT_Allocation al;
+};
+
 class JIT_Analyzer
 {
 public:
@@ -1206,6 +1221,7 @@ public:
     JIT_Allocation GetAllocation(int index);
     bool IsRegisterUsed(int reg);
     int StackSize();
+    void GetLiveValues(int index, std::vector<JIT_LiveValue>& live);
     ~JIT_Analyzer();
 
 private:
@@ -1302,6 +1318,34 @@ JIT_Allocation JIT_Analyzer::GetAllocation(int index)
     }
 
     return JIT_Allocation();
+}
+
+void JIT_Analyzer::GetLiveValues(int index, std::vector<JIT_LiveValue>& live)
+{
+    for (size_t i = 0; i < allocations.size(); i++)
+    {
+        auto& al = allocations[i];
+        JIT_Analyzer::Node* node = al.Head();
+        while (node)
+        {
+            if (node->start > index)
+            {
+                break;
+            }
+
+            if (node->start <= index && node->end >= index)
+            {
+                JIT_LiveValue& value = live.emplace_back();
+                value.al.pos = al.Pos();
+                value.al.type = al.Type();
+                value.al.reg = al.Register();
+                value.ref = node->ref;
+                break;
+            }
+
+            node = node->next;
+        }
+    }
 }
 
 void JIT_Analyzer::Allocation::Initialize(int reg, bool enabled)
@@ -1515,7 +1559,6 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             vm_jit_read_int(ir, &pc);
             {
                 const int numArgs = ir[pc++];
-                ir[pc++]; // type
                 for (int i = 0; i < numArgs; i++)
                 {
                     pc++; // skip type
@@ -1545,7 +1588,19 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             p2 = vm_jit_read_int(ir, &pc);
             break;
         case IR_SNAP:
-            pc++;
+            pc++; // number
+            {
+                const int numSlots = ir[pc++];
+                for (int i = 0; i < numSlots; i++)
+                {
+                    const int slot = ir[pc++];
+                    liveness[slot] = std::max(liveness[slot], ref - slot);
+                }
+            }
+            break;
+        case IR_UNBOX:
+            p1 = vm_jit_read_int(ir, &pc);
+            pc++; // type
             break;
         }
 
@@ -1617,13 +1672,15 @@ struct JIT_BackwardJump
     int _type;
 };
 
-struct JIT_Jump
+struct JIT_Guard
 {
     int _state;
     int _offset;
     int _pos;
     int _type;
     int _size;
+    int _snap;
+    int _ref;
 };
 
 struct JIT_Phi
@@ -1632,6 +1689,12 @@ struct JIT_Phi
     int _pos;   // # of instruction
     int _left;
     int _right;
+};
+
+struct JIT_Snapshot
+{
+    int _ref;
+    std::vector<int> entries;
 };
 
 struct JIT_Trace
@@ -1643,10 +1706,11 @@ struct JIT_Trace
     int _id;
     MemoryManager _mm;
 
-    std::vector<JIT_Jump> _forwardJumps;
+    std::vector<JIT_Guard> _forwardJumps;
     std::vector<JIT_BackwardJump> _backwardJumps;
     std::vector<JIT_ExitJump> _exitJumps;
     std::vector<JIT_Phi> _phis;
+    std::vector<JIT_Snapshot> _snaps;
 
     uint64_t _startTime;     // compilation start time
     uint64_t _endTime;       // compilation end time
@@ -1685,6 +1749,8 @@ public:
     int size;
     int refIndex;
     int argsProcessed;
+    int snapshot;
+    int snapRef;
     bool running;
     bool error;
 
@@ -1699,7 +1765,9 @@ public:
         argsProcessed(0),
         size(0),
         refIndex(0),
-        _manager(nullptr)
+        _manager(nullptr),
+        snapshot(0),
+        snapRef(0)
     {
     }
 
@@ -1708,6 +1776,19 @@ public:
         error = true;
         running = false;
     }
+};
+
+struct JIT_SnapSlot
+{
+    int64_t ref;
+    int64_t data;
+};
+
+struct JIT_Snap
+{
+    int64_t size;
+    int64_t ref;
+    JIT_SnapSlot slots[1];
 };
 
 //===================================
@@ -1811,28 +1892,50 @@ extern "C"
     {
         InvokeHandler(vm, name, numArgs);
 
-        int retInt;
-        std::string val;
-        if (GetParamInt(vm, &retInt) == VM_OK)
+        void* val = nullptr;
+        GetParam(vm, &val);
+        return val;
+
+        //int retInt;
+        //std::string val;
+        //if (GetParamInt(vm, &retInt) == VM_OK)
+        //{
+        //    int* data = (int*)mm->New(sizeof(retInt), TY_INT);
+        //    *data = retInt;
+        //    return data;
+        //}
+        //else if (GetParamString(vm, &val) == VM_OK)
+        //{
+        //    char* copy = (char*)mm->New(val.size() + 1, TY_STRING);
+        //    std::memcpy(copy, val.c_str(), val.size());
+        //    copy[val.size()] = 0;
+        //    return copy;
+        //}
+
+        //return nullptr;
+    }
+
+    static int vm_restore_snapshot(VirtualMachine* vm, int64_t* data, const int size, const int snap)
+    {
+        int64_t* pos = data + size / sizeof(int64_t) - 1;
+        JIT_Snap* s = reinterpret_cast<JIT_Snap*>(data);
+
+        Snapshot sn;
+        for (int64_t i = 0; i < s->size; i++)
         {
-            int* data = (int*)mm->New(sizeof(retInt), TY_INT);
-            *data = retInt;
-            return data;
-        }
-        else if (GetParamString(vm, &val) == VM_OK)
-        {
-            char* copy = (char*)mm->New(val.size() + 1, TY_STRING);
-            std::memcpy(copy, val.c_str(), val.size());
-            copy[val.size()] = 0;
-            return copy;
+            sn.Add(int(s->slots[i].ref), s->slots[i].data);
         }
 
-        return nullptr;
+        RestoreSnapshot(vm, sn, snap, int(s->ref));
+
+        return size;
     }
 
     static int vm_check_type(MemoryManager* mm, void* obj, int type)
     {
-        return mm->GetType(obj) == type ? VM_OK : VM_ERROR;
+        // TODO: the memory manager we a getting here is different
+        // than the one used to allocate thus it fails
+        return MemoryManager::GetTypeUnsafe(obj) == type ? VM_OK : VM_ERROR;
     }
 
     static char* vm_append_string_int(MemoryManager* mm, char* left, int right)
@@ -1963,36 +2066,13 @@ static void vm_jit_jump(Jitter* jitter, char type, int& count, int imm)
     }
 }
 
-static void vm_jit_patch_jump(Jitter* jitter, JIT_Jump& jump)
+static void vm_jit_patch_jump(Jitter* jitter, JIT_Guard& jump)
 {
     jump._state = PATCH_APPLIED;
 
     const int rel = jitter->count - (jump._offset + jump._size);
 
     vm_jit_jump(jitter, jump._type, jump._offset, rel);
-}
-
-static void vm_jit_patch_next_jump(Jitter* jitter)
-{
-    bool cont = true;
-    
-    while (jitter->_trace->_jumpPos < jitter->_trace->_forwardJumps.size() && cont)
-    {
-        cont = false;
-
-        auto& jump = jitter->_trace->_forwardJumps[jitter->_trace->_jumpPos];
-        if (*jitter->pc == jump._pos &&
-            jump._state == PATCH_INITIALIZED)
-        {
-            cont = true;
-            jitter->_trace->_jumpPos++;
-            jump._state = PATCH_APPLIED;
-
-            const int rel = jitter->count - (jump._offset + jump._size);
-
-            vm_jit_jump(jitter, jump._type, jump._offset, rel);
-        }
-    }
 }
 
 static void vm_jit_cmp_string(Jitter* jitter)
@@ -2072,11 +2152,13 @@ static void vm_jit_guard(Jitter* jitter)
 
     // Forward jump (requires patching)
 
-    JIT_Jump jump;
+    JIT_Guard jump;
     jump._offset = jitter->count;
     jump._type = type;
     jump._state = PATCH_INITIALIZED;
     jump._pos = *jitter->pc;
+    jump._ref = jitter->refIndex;
+    jump._snap = jitter->snapshot;
 
     // Just emit equals it will be overwritten by the patch process
     vm_jump_equals(jitter->jit, jitter->count, 0);
@@ -2135,51 +2217,6 @@ static void vm_jit_loopback(Jitter* jitter)
             
             const int imm = jitter->count - (jump._offset + jump._size);
             vm_jit_jump(jitter, jump._type, jump._offset, imm);
-        }
-    }
-}
-
-static void vm_jit_jump(Jitter* jitter)
-{
-    const int type = jitter->program[*jitter->pc];
-    (*jitter->pc)++;
-    short offset = jitter->program[*jitter->pc];
-    (*jitter->pc)++;
-    offset |= (jitter->program[*jitter->pc] << 8);
-    (*jitter->pc)++;
-
-    if (offset > 0)
-    {
-        // Forward jump (requires patching)
-
-        JIT_Jump jump;
-        jump._offset = jitter->count;
-        jump._type = type;
-        jump._state = PATCH_INITIALIZED;
-        jump._pos = *jitter->pc + offset;
-
-        // Just emit equals it will be overwritten by the patch process
-        vm_jump_equals(jitter->jit, jitter->count, 0);
-
-        jump._size = jitter->count - jump._offset;
-
-        const auto& pos = std::lower_bound(jitter->_trace->_forwardJumps.begin(), jitter->_trace->_forwardJumps.end(), jump, [](const JIT_Jump& j1, const JIT_Jump& j2) {
-            return j1._pos < j2._pos;
-            });
-        jitter->_trace->_forwardJumps.insert(pos, jump);
-    }
-    else
-    {
-        // Backward jump (no patching)
-        for (size_t i = 0; i < jitter->_trace->_backwardJumps.size(); i++)
-        {
-            auto& jump = jitter->_trace->_backwardJumps[i];
-            if (offset + *jitter->pc == jump._target)
-            {
-                const int imm = jump._pos - (jitter->count + 2 /*Length of jump instruction*/);
-                vm_jit_jump(jitter, jump._type, jitter->count, imm);
-                break;
-            }
         }
     }
 }
@@ -2500,9 +2537,6 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
     const int numParams = jitter->program[*jitter->pc];
     (*jitter->pc)++;
 
-    const int type = jitter->program[*jitter->pc];
-    (*jitter->pc)++;
-
     const char* name = FindFunctionName(vm, id);
     assert(name);
 
@@ -2522,40 +2556,6 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
         vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
         break;
     }
-
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_manager->_mm);
-    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, VM_REGISTER_EAX);
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, type);
-    vm_jit_call_internal_x64(jitter, (void*)vm_check_type);
-
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_ERROR);  // use Arg1 to hold this
-    vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_REGISTER_EAX);
-    
-    JIT_ExitJump& exit = jitter->_trace->_exitJumps.emplace_back();
-    exit._type = JUMP_E;
-    exit._offset = jitter->count;
-    exit._state = PATCH_INITIALIZED;
-    exit._pos = *jitter->pc;
-
-    vm_jump_equals(jitter->jit, jitter->count, 0); // patch
-
-    exit._size = jitter->count - exit._offset;
-
-    // Unbox
-
-    int dst;
-    switch (type)
-    {
-    case TY_INT:
-        dst = vm_jit_decode_dst(al);
-        vm_jit_mov(jitter, al, dst);
-        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, dst, 0); // de-reference
-        if (al.type == ST_STACK)
-        {
-            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, dst);
-        }
-        break;
-    }
 }
 
 static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
@@ -2563,9 +2563,6 @@ static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
     const int id = vm_jit_read_int(jitter->program, jitter->pc);
 
     const int numParams = jitter->program[*jitter->pc];
-    (*jitter->pc)++;
-
-    const int type = jitter->program[*jitter->pc];
     (*jitter->pc)++;
     
     const char* name = FindFunctionName(vm, id);
@@ -2582,6 +2579,59 @@ static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
     vm_jit_call_internal_x64(jitter, jitter->_manager->_co._vm_suspend);
 
     // Upon resuming we need to copy the stack back from the heap and the jump back to the resumption point.
+}
+
+static void vm_jit_unbox(VirtualMachine* vm, Jitter* jitter)
+{
+    const int id = vm_jit_read_int(jitter->program, jitter->pc);
+
+    JIT_Allocation al = jitter->analyzer.GetAllocation(id);
+
+    const int type = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_manager->_mm);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, VM_REGISTER_EAX);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, type);
+    vm_jit_call_internal_x64(jitter, (void*)vm_check_type);
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_ERROR);  // use Arg1 to hold this
+    vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_REGISTER_EAX);
+
+    JIT_Guard& guard = jitter->_trace->_forwardJumps.emplace_back();
+    guard._type = JUMP_E;
+    guard._offset = jitter->count;
+    guard._state = PATCH_INITIALIZED;
+    guard._pos = *jitter->pc;
+    guard._snap = jitter->snapshot;
+    guard._ref = jitter->refIndex;
+
+    vm_jump_equals(jitter->jit, jitter->count, 0); // patch
+
+    guard._size = jitter->count - guard._offset;
+
+    // Unbox
+
+    int dst;
+    switch (type)
+    {
+    case TY_INT:
+        dst = vm_jit_decode_dst(al);
+        vm_jit_mov(jitter, al, VM_REGISTER_EAX);
+        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_REGISTER_EAX, 0); // de-reference
+
+        switch (al.type)
+        {
+        case ST_STACK:
+            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, dst);
+            break;
+        case ST_REG:
+            vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
+            break;
+        }
+
+        break;
+    }
 }
 
 inline static void vm_jit_epilog(Jitter* jitter, const int stacksize)
@@ -2631,6 +2681,142 @@ static void vm_jit_phi(VirtualMachine* vm, Jitter* jitter)
 
     const int dst = vm_jit_decode_dst(a2);
     vm_jit_mov(jitter, a1, dst);
+}
+
+static void vm_jit_snap(VirtualMachine* vm, Jitter* jitter)
+{
+    jitter->snapshot = jitter->program[*jitter->pc];
+    jitter->snapRef = jitter->refIndex;
+    (*jitter->pc)++;
+
+    auto& snap = jitter->_trace->_snaps.emplace_back();
+    snap._ref = jitter->refIndex;
+
+    const int numSlots = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
+
+    for (int i = 0; i < numSlots; i++)
+    {
+        snap.entries.push_back(jitter->program[*jitter->pc]);
+
+        (*jitter->pc)++;
+    }
+}
+
+static int vm_jit_store(Jitter* jitter, JIT_LiveValue& value)
+{
+    const int dst = vm_jit_decode_dst(value.al);
+    vm_jit_mov(jitter, value.al, dst);
+
+    vm_push_reg(jitter->jit, jitter->count, dst);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, value.ref);
+    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EAX);
+
+    return 8 * 2; // 8 bytes for each register * number pushed
+}
+
+static void vm_jit_store_snapshot(VirtualMachine* vm, Jitter* jitter, const int ref, const int snap)
+{
+    /* Store snapshot
+       Get variables and push the registers/stack items onto the stack.
+       The live values could be temporaries.
+    */
+
+    const auto& snapshot = jitter->_trace->_snaps[snap];
+
+    std::vector<JIT_LiveValue> live;
+    jitter->analyzer.GetLiveValues(snapshot._ref, live);
+
+    assert(snapshot.entries.size() <= live.size());
+
+    int snapshotsize = 0;
+
+    for (size_t i = 0; i < live.size(); i++)
+    {
+        snapshotsize += vm_jit_store(jitter, live[i]);
+    }
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, ref);
+    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EAX);
+    snapshotsize += 8;
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, live.size());
+    vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EAX);
+    snapshotsize += 8;
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, snapshotsize);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG4, snap);
+
+    // We will do a jump after this which will use the argument(s)
+}
+
+static void vm_jit_exit_trace(VirtualMachine* vm, Jitter* jitter, const int stacksize)
+{
+    // Patch guard failures
+    if (jitter->_trace->_forwardJumps.size() > 0)
+    {
+        std::vector<JIT_Guard> jumps;
+        jumps.reserve(jitter->_trace->_forwardJumps.size() - 1);
+
+        for (size_t i = 0; i < jitter->_trace->_forwardJumps.size(); i++)
+        {
+            auto& guard = jitter->_trace->_forwardJumps[i];
+
+            vm_jit_patch_jump(jitter, guard);
+
+            vm_jit_store_snapshot(vm, jitter, guard._ref, guard._snap);
+
+            // The last guard handler can fall through to the epilog
+            if (i < jitter->_trace->_forwardJumps.size() - 1)
+            {
+                auto& jump = jumps.emplace_back();
+                jump._offset = jitter->count;
+                jump._type = JUMP;
+                jump._state = PATCH_INITIALIZED;
+                jump._pos = *jitter->pc;
+                jump._snap = 0;
+                jump._ref = 0;
+
+                vm_jit_jump(jitter, jump._type, jitter->count, 0); // to be patched
+
+                jump._size = jitter->count - jump._offset;
+            }
+        }
+
+        for (auto& jump : jumps)
+        {
+            vm_jit_patch_jump(jitter, jump);
+        }
+
+        // We need to store the VM_REGISTER_ESP before adjusting for the register homes
+        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)vm);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, VM_REGISTER_ESP);
+        
+        // TODO: For the ABI we really should move these into the space before the register homes.
+        // Until then we duplicate the register homes down here.
+        // 
+        // Pushing them to the stack and then calling a method may break things
+        // as they may get overwritten as they are the 'register homes'
+        const int register_homes = 8 * 4; // 4 register homes 8 bytes each
+        vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, register_homes);
+
+        // Generate a call to vm_restore_snapshot
+        // ARG1 = vm
+        // ARG2 = ESP
+        // ARG3 = size
+        // ARG4 = snap no
+
+        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, (long long)vm_restore_snapshot);
+        vm_call_absolute(jitter->jit, jitter->count, VM_REGISTER_EAX);
+
+        // The return value is the size
+        vm_add_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, VM_REGISTER_EAX);
+        vm_add_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, register_homes);
+
+        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, VM_ERROR);
+        vm_jit_epilog(jitter, stacksize);
+        vm_return(jitter->jit, jitter->count);
+    }
 }
 
 static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
@@ -2739,8 +2925,10 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
             vm_jit_phi(vm, jitter);
             break;
         case IR_SNAP:
-            // TODO
-            (*jitter->pc)++;
+            vm_jit_snap(vm, jitter);
+            break;
+        case IR_UNBOX:
+            vm_jit_unbox(vm, jitter);
             break;
         default:
             abort();
@@ -2753,18 +2941,7 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
     vm_jit_epilog(jitter, stacksize);
     vm_return(jitter->jit, jitter->count);
 
-    // Patch guard failures
-    if (jitter->_trace->_forwardJumps.size() > 0)
-    {
-        for (auto& jump : jitter->_trace->_forwardJumps)
-        {
-            vm_jit_patch_jump(jitter, jump);
-        }
-
-        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, VM_ERROR);
-        vm_jit_epilog(jitter, stacksize);
-        vm_return(jitter->jit, jitter->count);
-    }
+    vm_jit_exit_trace(vm, jitter, stacksize);
 }
 
 static void vm_jit_suspend(JIT_Manager* manager)
@@ -3021,7 +3198,6 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
     int ref = 0;
     int op1 = 0;
     int op2 = 0;
-    int op3 = 0;
     short offset = 0;
     while (pc < size)
     {
@@ -3054,8 +3230,7 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
         case IR_YIELD:
             op1 = vm_jit_read_int(trace, &pc);
             op2 = trace[pc++]; // num args
-            op3 = trace[pc++]; // type
-            std::cout << " IR_CALL " << op1 << " " << op2 << " " << op3;
+            std::cout << " IR_CALL " << op1 << " " << op2;
             {
                 for (int i = 0; i < op2; i++)
                 {
@@ -3126,7 +3301,20 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             break;
         case IR_SNAP:
             op1 = trace[pc++];
-            std::cout << " IR_SNAP " << op1 << std::endl;
+            op2 = trace[pc++];
+            std::cout << " IR_SNAP #" << op1 << " [";
+            {
+                for (int i = 0; i < op2; i++)
+                {
+                    std::cout << " " << int(trace[pc++]);
+                }
+            }
+            std::cout << " ]" << std::endl;
+            break;
+        case IR_UNBOX:
+            op2 = vm_jit_read_int(trace, &pc);
+            op1 = trace[pc++];
+            std::cout << " IR_UNBOX " << op1 << " " << op2 << std::endl;
             break;
         default:
             std::cout << " UNKOWN" << std::endl;
