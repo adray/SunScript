@@ -477,15 +477,18 @@ class Expr;
 class Call
 {
 public:
-    Call() : _yield(false) {};
+    Call() : _yield(false), _discard(false) {};
     void PushArg(Expr* expr);
     inline std::vector<Expr*>& Args() { return _args; }
     inline void SetYield() { _yield = true; }
     inline bool Yield() const { return _yield; }
+    inline void SetDiscard() { _discard = true; }
+    inline bool Discard() { return _discard; }
 
 private:
     std::vector<Expr*> _args;
     bool _yield;
+    bool _discard;
 };
 
 void Call::PushArg(Expr* expr)
@@ -751,7 +754,6 @@ private:
     std::string _errorText;
     int _errorLine;
     Program* _program;
-    bool _emitCall;
 
     std::unordered_map<std::string, Function> _functions;
     std::stack<StackFrame> _frames;
@@ -762,7 +764,6 @@ Parser::Parser(const std::vector<Token>& tokens)
     _scanning(false),
     _pos(0),
     _isError(false),
-    _emitCall(false),
     _errorLine(0)
 {
     _program = CreateProgram();
@@ -1007,12 +1008,16 @@ void Parser::EmitExpr(Expr* expr)
                 EmitDebug(block, tok.Line());
                 EmitYield(block, id, static_cast<unsigned char>(args.size()));
             }
+            else if (call->Discard())
+            {
+                EmitDebug(block, tok.Line());
+                EmitCallX(block, id, static_cast<unsigned char>(args.size()));
+            }
             else
             {
                 EmitDebug(block, tok.Line());
                 EmitCall(block, id, static_cast<unsigned char>(args.size()));
             }
-            _emitCall = true;
         }
         else
         {
@@ -1026,10 +1031,6 @@ void Parser::EmitExpr(Expr* expr)
             {
                 SetError("Use of undefined variable '" + tok.String() + "'.");
             }
-
-            // If we happened to just make a function call, clear the 
-            // emit flag to indicate we have consumed the return value.
-            _emitCall = false;
         }
         break;
     default:
@@ -1529,21 +1530,13 @@ void Parser::ParseAssignmentStatement()
         }
         else
         {
-            // TODO: this will be a call void
             Expr* expr = ParseCall();
             if (expr)
             {
+                expr->GetCall()->SetDiscard();
+
                 EmitExpr(expr);
                 FreeExpr(expr);
-
-                // If we called a function and its return value wasn't used.
-                // Lets get rid of it. In the cases it doesn't return something
-                // EmitPop just won't do anything so that is ok as well.
-                if (_emitCall)
-                {
-                    EmitPop(Block());
-                    _emitCall = false;
-                }
             }
 
             if (Match(TokenType::SEMICOLON))

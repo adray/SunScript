@@ -1362,6 +1362,26 @@ static void Op_Call(VirtualMachine* vm)
     }    
 }
 
+static void Op_CallX(VirtualMachine* vm)
+{
+    Op_Call(vm);
+
+    if (vm->stack.size() > vm->stackBounds)
+    {
+        if (vm->stack.size() == 0)
+        {
+            vm->statusCode = VM_ERROR;
+            vm->running = false;
+        }
+        else
+        {
+            vm->stack.pop();
+
+            if (vm->tracing) { Trace_Pop_Discard(vm); }
+        }
+    }
+}
+
 static void Op_Yield(VirtualMachine* vm)
 {
     if (vm->handler)
@@ -1395,26 +1415,6 @@ static void Op_Yield(VirtualMachine* vm)
         // this is an error
         vm->running = false;
         vm->statusCode = VM_ERROR;
-    }
-}
-
-static void Op_Pop_Discard(VirtualMachine* vm)
-{
-    assert(vm->statusCode == VM_OK);
-
-    if (vm->stack.size() > vm->stackBounds)
-    {
-        if (vm->stack.size() == 0)
-        {
-            vm->statusCode = VM_ERROR;
-            vm->running = false;
-        }
-        else
-        {
-            vm->stack.pop();
-            
-            if (vm->tracing) { Trace_Pop_Discard(vm); }
-        }
     }
 }
 
@@ -2230,6 +2230,9 @@ static int ResumeScript2(VirtualMachine* vm)
         case OP_CALL:
             Op_Call(vm);
             break;
+        case OP_CALLX:
+            Op_CallX(vm);
+            break;
         case OP_DONE:
             if (vm->statusCode == VM_OK)
             {
@@ -2264,9 +2267,6 @@ static int ResumeScript2(VirtualMachine* vm)
         //    break;
         case OP_RETURN:
             Op_Return(vm);
-            break;
-        case OP_POP_DISCARD:
-            Op_Pop_Discard(vm);
             break;
         case OP_INCREMENT:
             Op_Increment(vm);
@@ -2785,9 +2785,6 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
         case OP_POP:
             ss << "OP_POP " << int(Read_Byte(programData, &vm->programCounter)) << std::endl;
             break;
-        case OP_POP_DISCARD:
-            ss << "OP_POP_DISCARD" << std::endl;
-            break;
         case OP_PUSH:
         {
             const unsigned char ty = programData[vm->programCounter++];
@@ -2825,6 +2822,9 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             break;
         case OP_CALL:
             ss << "OP_CALL " << int(Read_Byte(programData, &vm->programCounter)) << " " << Read_Int(programData, &vm->programCounter) << std::endl;
+            break;
+        case OP_CALLX:
+            ss << "OP_CALLX " << int(Read_Byte(programData, &vm->programCounter)) << " " << Read_Int(programData, &vm->programCounter) << std::endl;
             break;
         case OP_DONE:
             ss << "OP_DONE" << std::endl;
@@ -2960,14 +2960,16 @@ void SunScript::EmitPop(ProgramBlock* program, unsigned char local)
     program->data.push_back(local);
 }
 
-void SunScript::EmitPop(ProgramBlock* program)
-{
-    program->data.push_back(OP_POP_DISCARD);
-}
-
 void SunScript::EmitYield(ProgramBlock* program, int func, unsigned char numArgs)
 {
     program->data.push_back(OP_YIELD);
+    program->data.push_back(numArgs);
+    EmitInt(program->data, func);
+}
+
+void SunScript::EmitCallX(ProgramBlock* program, int func, unsigned char numArgs)
+{
+    program->data.push_back(OP_CALLX);
     program->data.push_back(numArgs);
     EmitInt(program->data, func);
 }

@@ -13,6 +13,7 @@ namespace SunScript
     constexpr unsigned char OP_YIELD = 0x3;
     constexpr unsigned char OP_LOCAL = 0x4;
     constexpr unsigned char OP_SET = 0x5;
+    constexpr unsigned char OP_CALLX = 0x6;
 
     constexpr unsigned char OP_DONE = 0x8;
     constexpr unsigned char OP_PUSH_LOCAL = 0x9;
@@ -29,7 +30,6 @@ namespace SunScript
     constexpr unsigned char OP_JUMP = 0x23;
     constexpr unsigned char OP_CMP = 0x24;
     constexpr unsigned char OP_RETURN = 0x25;
-    constexpr unsigned char OP_POP_DISCARD = 0x26;
 
     constexpr unsigned char OP_LSPUSH = OP_PUSH | MK_LOOPSTART;
     constexpr unsigned char OP_LSPOP = OP_POP | MK_LOOPSTART;
@@ -307,9 +307,9 @@ namespace SunScript
 
     void EmitPop(ProgramBlock* program, unsigned char local);
 
-    void EmitPop(ProgramBlock* program);
-
     void EmitYield(ProgramBlock* program, int func, unsigned char numArgs);
+
+    void EmitCallX(ProgramBlock* program, int func, unsigned char numArgs);
 
     void EmitCall(ProgramBlock* program, int func, unsigned char numArgs);
 
