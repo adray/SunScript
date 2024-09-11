@@ -1803,6 +1803,7 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
 
     if (numNodes > 0)
     {
+        int numPhiNodesInserted = 0;
         for (size_t i = 0; i < loop.locals.size(); i++)
         {
             auto& local = loop.locals[i];
@@ -1813,11 +1814,11 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
                 phi->left = local.minRef;
                 phi->right = local.maxRef;
                 phi->pos = vm->trace.size();
-                phi->ref = loop.startRef->ref + 1;
+                phi->ref = loop.startRef->ref + numPhiNodesInserted;
                 phi->flags = 0;
                 phi->pc = vm->programCounter;
                 phi->type = TY_VOID;
-                vm->tr.nodes.insert(vm->tr.nodes.begin() + loop.startRef->ref + 1, phi);
+                vm->tr.nodes.insert(vm->tr.nodes.begin() + loop.startRef->ref + numPhiNodesInserted, phi);
 
                 vm->trace.push_back(IR_PHI);
                 Trace_Int(vm, local.minRef->ref);
@@ -1825,36 +1826,23 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
                 vm->tr.ref++;
 
                 phi->size = vm->trace.size() - phi->pos;
+                numPhiNodesInserted++;
             }
         }
 
         // Update the nodes after the PHI nodes were inserted at
-        for (size_t i = loop.startRef->ref + numNodes + 1; i < vm->tr.nodes.size(); i++)
+        for (size_t i = loop.startRef->ref + numNodes; i < vm->tr.nodes.size(); i++)
         {
             TraceNode* node = vm->tr.nodes[i];
             node->ref += numNodes;
-            
-            const int type = vm->trace[node->pos];
-            short jump = 0;
-
-            switch (type)
-            {
-                case IR_LOOPBACK:
-                    // patch loopback
-                    jump |= short(vm->trace[node->pos + 2]) | ((short(vm->trace[node->pos + 3]) << 8));
-                    jump += -numNodes;
-                    vm->trace[node->pos + 2] = jump & 0xFF;
-                    vm->trace[node->pos + 3] = (jump >> 8) & 0xFF;
-                    break;
-            }
         }
 
-        for (size_t i = loop.startRef->ref + 1; i < loop.startRef->ref + numNodes + 1; i++) // loop over the PHI nodes
+        for (size_t i = loop.startRef->ref - numNodes; i < loop.startRef->ref; i++) // loop over the PHI nodes
         {
             TraceNode* phi = vm->tr.nodes[i];
 
             // We need to update the nodes left/right so we are inserted between
-            for (size_t j = loop.startRef->ref + numNodes + 1; j < vm->tr.nodes.size(); j++) // nodes from after the PHI nodes to the end
+            for (size_t j = loop.startRef->ref; j < vm->tr.nodes.size(); j++) // nodes from after the PHI nodes to the end
             {
                 TraceNode* node = vm->tr.nodes[j];
                 if (node->left == phi->left || node->left == phi->right)

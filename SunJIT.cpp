@@ -2178,18 +2178,6 @@ static void vm_jit_loopback(Jitter* jitter)
     (*jitter->pc)++;
 
     assert (offset <= 0);
-
-    // Backward jump (no patching)
-    for (size_t i = 0; i < jitter->_trace->_backwardJumps.size(); i++)
-    {
-        auto& jump = jitter->_trace->_backwardJumps[i];
-        if (offset + jitter->refIndex == jump._target)
-        {
-            const int imm = jump._pos - (jitter->count + 5 /*Length of jump instruction*/);
-            vm_jit_jump(jitter, jump._type, jitter->count, imm);
-            break;
-        }
-    }
     
     // Apply Phis
     for (size_t i = 0; i < jitter->_trace->_phis.size(); i++)
@@ -2204,6 +2192,18 @@ static void vm_jit_loopback(Jitter* jitter)
 
             const int dst = vm_jit_decode_dst(a2);
             vm_jit_mov(jitter, a1, dst);
+        }
+    }
+
+    // Backward jump (no patching)
+    for (size_t i = 0; i < jitter->_trace->_backwardJumps.size(); i++)
+    {
+        auto& jump = jitter->_trace->_backwardJumps[i];
+        if (offset + jitter->refIndex == jump._target)
+        {
+            const int imm = jump._pos - (jitter->count + 5 /*Length of jump instruction*/);
+            vm_jit_jump(jitter, jump._type, jitter->count, imm);
+            break;
         }
     }
 

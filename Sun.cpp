@@ -8,6 +8,7 @@
 #include <sstream>
 #include <stack>
 #include <filesystem>
+#include <assert.h>
 
 using namespace SunScript;
 
@@ -52,6 +53,7 @@ enum class TokenType
     YIELD,
     RETURN,
     WHILE,
+    FOR,
 
     // Literals
 
@@ -128,6 +130,7 @@ Scanner::Scanner()
     AddKeyword("yield", TokenType::YIELD);
     AddKeyword("return", TokenType::RETURN);
     AddKeyword("while", TokenType::WHILE);
+    AddKeyword("for", TokenType::FOR);
 }
 
 void Scanner::AddKeyword(const std::string& keyword, TokenType token)
@@ -680,7 +683,6 @@ private:
 
     struct Branch
     {
-        int type;
         FlowGraph graph;
         Label endLabel;
         Label startLabel;
@@ -714,13 +716,16 @@ private:
     void FreeExpr(Expr* expr);
     void ParseVar();
     void ParseWhile();
+    void ParseFor();
     void ParseIfStatement();
-    void ParseElse();
-    void ParseStatement();
-    void ParseAssignment();
+    void ParseElse(Branch& prevBr);
+    void ParseAssignmentStatement();
+    Expr* ParseAssignment();
     void ParseFunction();
     void ParseReturn();
     void ParseYield();
+    void ParseStatement();
+    void ParseStatementBlock();
     void ParseParameter(std::vector<std::string>& params);
     Expr* ParseExprStatement();
     Expr* ParseExpression();
@@ -736,6 +741,8 @@ private:
     Call* ParseArgument();
     char Flip(char jump);
     int GetOrCreateFunction(const std::string& name, ProgramBlock* blk);
+    void PushScope();
+    void PopScope();
 
     bool _scanning;
     int _pos;
@@ -748,12 +755,7 @@ private:
 
     std::unordered_map<std::string, Function> _functions;
     std::stack<StackFrame> _frames;
-    std::stack<Branch> _branches;
 };
-
-constexpr int ST_IF = 0x0;
-constexpr int ST_ELSE = 0x1; // stack indicating that 'else' clause is added
-constexpr int ST_WHILE = 0x2;
 
 Parser::Parser(const std::vector<Token>& tokens)
     : _tokens(tokens),
@@ -765,10 +767,29 @@ Parser::Parser(const std::vector<Token>& tokens)
 {
     _program = CreateProgram();
     _frames.push(StackFrame());
-    _frames.top()._scope.push(std::unordered_set<std::string>());
+    PushScope();
     _frames.top()._block = CreateProgramBlock(true, "main", 0);
 
     GetOrCreateFunction("main", _frames.top()._block);
+}
+
+void Parser::PushScope()
+{
+    assert(_frames.size() > 0);
+    _frames.top()._scope.push(std::unordered_set<std::string>());
+}
+
+void Parser::PopScope()
+{
+    assert(_frames.size() > 0);
+
+    auto& top = _frames.top();
+    for (auto& item : top._scope.top())
+    {
+        top._vars.erase(item);
+    }
+
+    top._scope.pop();
 }
 
 int Parser::GetOrCreateFunction(const std::string& name, ProgramBlock* blk)
@@ -1079,6 +1100,15 @@ void Parser::ParseYield()
 
         EmitExpr(expr);
         FreeExpr(expr);
+
+        if (Match(TokenType::SEMICOLON))
+        {
+            Advance();
+        }
+        else
+        {
+            SetError("Unexpected token.");
+        }
     }
     else
     {
@@ -1199,7 +1229,7 @@ void Parser::ParseFunction()
                     Advance();
                     _frames.push(StackFrame());
                     auto& top = _frames.top();
-                    top._scope.push(std::unordered_set<std::string>());
+                    PushScope();
                     top._block = block;
 
                     for (int i = 0; i < params.size(); i++)
@@ -1207,6 +1237,21 @@ void Parser::ParseFunction()
                         auto& param = params[i];
                         top._vars.insert(std::pair<std::string, int>(param, i));
                     }
+
+                    while (!Match(TokenType::CLOSE_BRACE))
+                    {
+                        ParseStatement();
+                    }
+                    Advance();
+
+                    // If there is no top level return insert one.
+                    if (!_frames.top()._return)
+                    {
+                        EmitReturn(Block());
+                    }
+
+                    EmitProgramBlock(_program, Block());
+                    _frames.pop();
                 }
                 else
                 {
@@ -1237,12 +1282,6 @@ Expr* Parser::ParseCall()
         {
             Advance();
         }
-    }
-    if (Match(TokenType::INCREMENT) || Match(TokenType::DECREMENT))
-    {
-        Token token = Peek();
-        Advance();
-        expr = new Expr(nullptr, expr, token);
     }
     return expr;
 }
@@ -1429,15 +1468,17 @@ void Parser::ParseIfStatement()
             Advance();
 
             Branch br;
-            br.type = ST_IF;
 
             br.graph.BuildFlowGraph(expr);
             EmitFlowGraph(br.graph, Block());
 
             FreeExpr(expr);
 
-            _branches.push(br);
-            _frames.top()._scope.push(std::unordered_set<std::string>());
+            PushScope();
+            ParseStatementBlock();
+            PopScope();
+
+            ParseElse(br);
         }
     }
     else
@@ -1456,42 +1497,68 @@ Expr* Parser::ParseExprStatement()
     }
     else
     {
-        SetError("Unexpected token occured parsing statement.");
+        SetError("Unexpected token occurred parsing statement.");
     }
     return expr;
 }
 
-void Parser::ParseStatement()
+void Parser::ParseAssignmentStatement()
 {
     if (Match(TokenType::IDENTIFIER))
     {
         Token identifier = Peek();
         StackFrame& frame = _frames.top();
-        if (frame._vars.find(identifier.String()) != frame._vars.end())
+        const auto& var = frame._vars.find(identifier.String());
+        if (var != frame._vars.end())
         {
-            ParseAssignment();
-            return;
+            Expr* expr = ParseAssignment();
+
+            if (Match(TokenType::SEMICOLON))
+            {
+                Advance();
+
+                EmitExpr(expr);
+                EmitPop(Block(), var->second);
+            }
+            else
+            {
+                SetError("Unexpected token.");
+            }
+
+            FreeExpr(expr);
         }
-    }
-
-    Expr* expr = ParseExprStatement();
-    if (expr)
-    {
-        EmitExpr(expr);
-        FreeExpr(expr);
-
-        // If we called a function and its return value wasn't used.
-        // Lets get rid of it. In the cases it doesn't return something
-        // EmitPop just won't do anything so that is ok as well.
-        if (_emitCall)
+        else
         {
-            EmitPop(Block());
-            _emitCall = false;
+            // TODO: this will be a call void
+            Expr* expr = ParseCall();
+            if (expr)
+            {
+                EmitExpr(expr);
+                FreeExpr(expr);
+
+                // If we called a function and its return value wasn't used.
+                // Lets get rid of it. In the cases it doesn't return something
+                // EmitPop just won't do anything so that is ok as well.
+                if (_emitCall)
+                {
+                    EmitPop(Block());
+                    _emitCall = false;
+                }
+            }
+
+            if (Match(TokenType::SEMICOLON))
+            {
+                Advance();
+            }
+            else
+            {
+                SetError("Unexpected token.");
+            }
         }
     }
 }
 
-void Parser::ParseAssignment()
+Expr* Parser::ParseAssignment()
 {
     Token identifier = Peek();
     Advance();
@@ -1501,98 +1568,58 @@ void Parser::ParseAssignment()
     if (it == _frames.top()._vars.end())
     {
         SetError("Undefined variable '" + identifier.String() + "'");
-        return;
+        return nullptr;
     }
 
+    Token op = Peek();
+    Expr* expr = nullptr;
     if (Match(TokenType::EQUALS))
     {
         Advance();
-        Expr* expr = ParseExpression();
-
-        if (Match(TokenType::SEMICOLON))
-        {
-            EmitExpr(expr);
-            EmitPop(Block(), it->second);
-            FreeExpr(expr);
-
-            Advance();
-        }
-        else
-        {
-            SetError("Unexcepted token.");
-        }
+        expr = ParseExpression();
     }
     else if (Match(TokenType::INCREMENT))
     {
         Advance();
-
-        if (Match(TokenType::SEMICOLON))
-        {
-            EmitPushLocal(Block(), it->second);
-            EmitIncrement(Block());
-            EmitPop(Block(), it->second);
-        }
-        else
-        {
-            SetError("Unexcepted token.");
-        }
+        expr = new Expr(new Expr(nullptr, nullptr, identifier), nullptr, op);
     }
     else if (Match(TokenType::DECREMENT))
     {
         Advance();
-
-        if (Match(TokenType::SEMICOLON))
-        {
-            EmitPushLocal(Block(), it->second);
-            EmitDecrement(Block());
-            EmitPop(Block(), it->second);
-        }
-        else
-        {
-            SetError("Unexcepted token.");
-        }
+        expr = new Expr(new Expr(nullptr, nullptr, identifier), nullptr, op);
     }
-    else if (Match(TokenType::PLUS_EQUALS) || Match(TokenType::MINUS_EQUALS) || Match(TokenType::STAR_EQUALS) || Match(TokenType::SLASH_EQUALS))
+    else if (Match(TokenType::PLUS_EQUALS) ||
+        Match(TokenType::MINUS_EQUALS) ||
+        Match(TokenType::STAR_EQUALS) ||
+        Match(TokenType::SLASH_EQUALS))
     {
-        Token token = Peek();
-
         Advance();
-        Expr* expr = ParseExpression();
 
-        if (Match(TokenType::SEMICOLON))
+        TokenType type;
+        switch (op.Type())
         {
-            EmitExpr(expr);
-            EmitPushLocal(Block(), it->second);
-            if (token.Type() == TokenType::MINUS_EQUALS)
-            {
-                EmitSub(Block());
-            }
-            else if (token.Type() == TokenType::PLUS_EQUALS)
-            {
-                EmitAdd(Block());
-            }
-            else if (token.Type() == TokenType::STAR_EQUALS)
-            {
-                EmitMul(Block());
-            }
-            else if (token.Type() == TokenType::SLASH_EQUALS)
-            {
-                EmitDiv(Block());
-            }
-            EmitPop(Block(), it->second);
-            FreeExpr(expr);
+        case TokenType::MINUS_EQUALS:
+            type = TokenType::MINUS;
+            break;
+        case TokenType::PLUS_EQUALS:
+            type = TokenType::PLUS;
+            break;
+        case TokenType::STAR_EQUALS:
+            type = TokenType::STAR;
+            break;
+        case TokenType::SLASH_EQUALS:
+            type = TokenType::SLASH;
+            break;
+        }
 
-            Advance();
-        }
-        else
-        {
-            SetError("Unexcepted token.");
-        }
+        expr = new Expr(new Expr(nullptr, nullptr, identifier), ParseExpression(), Token(type, op.String(), op.Line()));
     }
     else
     {
         SetError("Unexcepted token.");
     }
+
+    return expr;
 }
 
 void Parser::ParseVar()
@@ -1652,68 +1679,151 @@ void Parser::ParseVar()
     }
 }
 
-void Parser::ParseElse()
+void Parser::ParseElse(Branch& prevBr)
 {
-    Advance();
     if (Match(TokenType::ELSE))
     {
         Advance();
-        if (_branches.size() > 0)
+
+        // After the IF body is executed jump to the end.
+        EmitJump(Block(), JUMP, &prevBr.endLabel);
+
+        if (Match(TokenType::OPEN_BRACE))
         {
-            // After the IF body is executed jump to the end.
-            EmitJump(Block(), JUMP, &_branches.top().endLabel);
+            Advance();
 
-            if (Match(TokenType::OPEN_BRACE))
-            {
-                Advance();
+            Branch br;
+            br.endLabel = prevBr.endLabel;
 
-                auto& top = _branches.top();
+            EmitLabel(Block(), prevBr.graph.Failure());
 
-                Branch br;
-                br.type = ST_ELSE;
-                br.endLabel = top.endLabel;
+            PushScope();
+            ParseStatementBlock();
+            PopScope();
 
-                EmitLabel(Block(), top.graph.Failure());
+            EmitLabel(Block(), br.graph.Failure());
+            EmitLabel(Block(), &br.endLabel); // end if
+        }
+        else if (Match(TokenType::IF))
+        {
+            Advance();
 
-                // Replace the current value now we are in an else
-                _branches.pop();
-                _branches.push(br);
-                _frames.top()._scope.push(std::unordered_set<std::string>());
-            }
-            else if (Match(TokenType::IF))
-            {
-                Advance();
+            EmitLabel(Block(), prevBr.graph.Failure());
+            Label label = prevBr.endLabel;
 
-                auto& top = _branches.top();
-                EmitLabel(Block(), top.graph.Failure());
-                Label label = top.endLabel;
+            ParseIfStatement();
 
-                _branches.pop();
-
-                ParseIfStatement();
-
-                // Propagate the end labels.
-                auto& end = _branches.top().endLabel;
-                end.jumps.insert(
-                    end.jumps.end(),
-                    label.jumps.begin(),
-                    label.jumps.end());
-            }
-            else
-            {
-                SetError("Unexpected token after ELSE clause.");
-            }
+            // Propagate the end labels.
+            auto& end = prevBr.endLabel;
+            end.jumps.insert(
+                end.jumps.end(),
+                label.jumps.begin(),
+                label.jumps.end());
         }
         else
         {
-            SetError("Unexpected else clause");
+            SetError("Unexpected token after ELSE clause.");
         }
     }
     else
     {
-        EmitLabel(Block(), _branches.top().graph.Failure());
-        EmitLabel(Block(), &_branches.top().endLabel);
-        _branches.pop(); // end if
+        EmitLabel(Block(), prevBr.graph.Failure());
+        EmitLabel(Block(), &prevBr.endLabel); // end if
+    }
+}
+
+void Parser::ParseFor()
+{
+    if (Match(TokenType::OPEN_PARAN))
+    {
+        Token token = Peek();
+        Advance();
+
+        PushScope();
+
+        if (Match(TokenType::VAR))
+        {
+            Advance();
+            ParseVar();
+        }
+        else if (Match(TokenType::SEMICOLON))
+        {
+            Advance();
+        }
+        else
+        {
+            SetError("Unexpected token.");
+        }
+
+        Expr* second = ParseExpression();
+
+        if (Match(TokenType::SEMICOLON))
+        {
+            Advance();
+        }
+        else
+        {
+            SetError("Unexpected token.");
+        }
+
+        Token left = Peek();
+        Expr* third = ParseAssignment();
+
+        if (Match(TokenType::CLOSE_PARAN))
+        {
+            Advance();
+        }
+        else
+        {
+            SetError("Unexcepted token.");
+        }
+
+        if (!IsError() && Match(TokenType::OPEN_BRACE))
+        {
+            Advance();
+
+            // Before loop body
+
+            Branch br;
+            MarkLabel(Block(), &br.startLabel);
+
+            if (second)
+            {
+                br.graph.BuildFlowGraph(second);
+                EmitFlowGraph(br.graph, Block());
+            }
+
+            // Loop body
+            ParseStatementBlock();
+
+            // After loop
+            if (third)
+            {
+                auto& frame = _frames.top();
+
+                EmitExpr(third);
+                EmitPop(Block(), frame._vars[left.String()]);
+                FreeExpr(third);
+            }
+
+            PopScope();
+
+            SunScript::ProgramBlock* prog = Block();
+
+            EmitJump(prog, JUMP, &br.startLabel);   // Unconditionally jump to start of loop.
+            EmitMarkedLabel(prog, &br.startLabel);
+            EmitLabel(prog, &br.endLabel);
+
+            if (second)
+            {
+                EmitLabel(prog, br.graph.Failure());
+                FreeExpr(second);
+            }
+        }
+    }
+    else
+    {
+        SetError("Unexcepted token.");
     }
 }
 
@@ -1740,20 +1850,79 @@ void Parser::ParseWhile()
             Advance();
 
             Branch br;
-            br.type = ST_WHILE;
             MarkLabel(Block(), &br.startLabel);
 
             br.graph.BuildFlowGraph(expr);
             EmitFlowGraph(br.graph, Block());
             FreeExpr(expr);
 
-            _branches.push(br);
-            _frames.top()._scope.push(std::unordered_set<std::string>());
+            PushScope();
+            ParseStatementBlock();
+            PopScope();
+
+            SunScript::ProgramBlock* prog = Block();
+
+            EmitJump(prog, JUMP, &br.startLabel);   // Unconditionally jump to start of loop.
+            EmitMarkedLabel(prog, &br.startLabel);
+            EmitLabel(prog, &br.endLabel);
+            EmitLabel(prog, br.graph.Failure());
         }
     }
     else
     {
         SetError("Unexcepted token.");
+    }
+}
+
+void Parser::ParseStatementBlock()
+{
+    while (_scanning && !Match(TokenType::CLOSE_BRACE))
+    {
+        ParseStatement();
+    }
+    if (!Match(TokenType::CLOSE_BRACE))
+    {
+        SetError("Expected close brace.");
+    }
+    Advance();
+}
+
+void Parser::ParseStatement()
+{
+    Token token = Peek();
+    switch (token.Type())
+    {
+    case TokenType::WHILE:
+        Advance();
+        ParseWhile();
+        break;
+    case TokenType::FOR:
+        Advance();
+        ParseFor();
+        break;
+    case TokenType::IF:
+        Advance();
+        ParseIfStatement();
+        break;
+    case TokenType::VAR:
+        Advance();
+        ParseVar();
+        break;
+    case TokenType::FUNCTION:
+        ParseFunction();
+        break;
+    case TokenType::RETURN:
+        ParseReturn();
+        break;
+    case TokenType::YIELD:
+        ParseYield();
+        break;
+    case TokenType::IDENTIFIER:
+        ParseAssignmentStatement();
+        break;
+    default:
+        SetError("Unexpected token.");
+        break;
     }
 }
 
@@ -1763,96 +1932,7 @@ void Parser::Parse()
 
     while (_scanning)
     {
-        Token token = Peek();
-        switch (token.Type())
-        {
-        case TokenType::WHILE:
-            Advance();
-            ParseWhile();
-            break;
-        case TokenType::IF:
-            Advance();
-            ParseIfStatement();
-            break;
-        case TokenType::VAR:
-            Advance();
-            ParseVar();
-            break;
-        case TokenType::CLOSE_BRACE:
-            if (_branches.size() > 0)
-            {
-                const int val = _branches.top().type;
-
-                if (val == ST_IF || val == ST_ELSE)
-                {
-                    auto& top = _frames.top();
-                    for (auto& item : top._scope.top())
-                    {
-                        top._vars.erase(item);
-                    }
-
-                    _frames.top()._scope.pop();
-                    ParseElse();
-                }
-                else if (val == ST_WHILE)
-                {
-                    // while loop?
-                    auto& top = _frames.top();
-                    for (auto& item : top._scope.top())
-                    {
-                        top._vars.erase(item);
-                    }
-
-                    _frames.top()._scope.pop();
-
-                    auto& br = _branches.top();
-                    SunScript::ProgramBlock* prog = Block();
-
-                    EmitJump(prog, JUMP, &br.startLabel);   // Unconditionally jump to start of loop.
-                    EmitMarkedLabel(prog, &br.startLabel);
-                    EmitLabel(prog, &br.endLabel);
-                    EmitLabel(prog, br.graph.Failure());
-                    _branches.pop();
-
-                    Advance();
-                }
-            }
-            else if (_frames.size() > 1)
-            {
-                Advance();
-
-                // If there is no top level return insert one.
-                if (!_frames.top()._return)
-                {
-                    EmitReturn(Block());
-                }
-
-                EmitProgramBlock(_program, Block());
-                _frames.pop();
-            }
-            else
-            {
-                SetError("Unexpected close brace.");
-            }
-            break;
-        case TokenType::FUNCTION:
-            ParseFunction();
-            break;
-        case TokenType::RETURN:
-            ParseReturn();
-            break;
-        case TokenType::YIELD:
-            ParseYield();
-            break;
-        default:
-            ParseStatement();
-            break;
-        }
-    }
-
-    if (_branches.size() != 0)
-    {
-        SetError("Expected close brace.");
+        ParseStatement();
     }
 
     if (!_isError)
@@ -1919,16 +1999,16 @@ static SunScript::Program* CompileFile2(const std::string& filepath, std::string
             Parser parser(scanner.Tokens());
             parser.Parse();
 
-            if (parser.IsError() && error)
+            if (!parser.IsError())
+            {
+                program = parser.GetProgram();
+            }
+            else if (error)
             {
                 std::stringstream ss;
                 ss << "Error Line: " << parser.ErrorLine() << " " << parser.Error();
 
                 *error = ss.str();
-            }
-            else
-            {
-                program = parser.GetProgram();
             }
         }
     }

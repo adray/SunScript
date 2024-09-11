@@ -3,14 +3,18 @@ program        - statement* EOF ;
 statement      - exprStmt ;
 
 exprStmt       - expression ";"
+                 | assignment ";"
+                 | declaration
                  | whileStmt
                  | ifStmt 
+                 | forStmt
                  | function
                  | yield
                  ;
 
 ifSrmt         - "if" "(" expression ")" "{" (statement*) "}" ( "else" ( ifStmt | "{" statement* "}" ) )? ;
 whileStmt      - "while" "(" expression ")" "{" statement* "}" ;
+forStmt        - "for" "(" declaration? ";" expression? ";" assignment? ")" "{" statement* "}" ;
 
 expression     - logicalOr ;
 logicalOr      - logicalAnd ( "||" logicalAnd )* ;
@@ -23,9 +27,14 @@ unary          - ( "!" | "-" ) unary
                | call ;
 primary        - NUMBER | STRING | "true" | "false" | "nil"
                | "(" expression ")" ;
-call           - primary ( "(" argument? ")" )? ( "++" | "--")? ;
+call           - primary ( "(" argument? ")" );
 argument       - expression ( "," expression )* ;
 function       - "function" identifier "(" parameter? ")" "{" (statement*) "}" ;
 parameter      - identifier ( "," identifier )* ;
 return         - "return" expression ;
 yield          - "yield" call ;
+assignment     - indentifier "=" expression
+                | indentifier ( "++" | "--")
+                | indentifier ( "+=" | "-=" | "*=" | "/=") expression
+                ;
+declaration    - "var" indentifier ";" ;

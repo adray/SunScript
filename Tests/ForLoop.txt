@@ -1,0 +1,12 @@
+
+var k = 10;
+k += 5;
+
+var j = 0;
+for (var i = 0; i < 10; i++)
+{
+    j++;
+    
+}
+
+assert(10, j);
