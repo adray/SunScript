@@ -1795,7 +1795,7 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
     for (size_t i = 0; i < loop.locals.size(); i++)
     {
         auto& local = loop.locals[i];
-        if (local.minRef->ref < local.maxRef->ref)
+        if (local.minRef && local.maxRef && local.minRef->ref < local.maxRef->ref)
         {
             numNodes++;
         }
@@ -1807,7 +1807,7 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
         for (size_t i = 0; i < loop.locals.size(); i++)
         {
             auto& local = loop.locals[i];
-            if (local.minRef->ref < local.maxRef->ref)
+            if (local.minRef && local.maxRef && local.minRef->ref < local.maxRef->ref)
             {
                 // Generate a Phi node
                 TraceNode* phi = reinterpret_cast<TraceNode*>(vm->tr.mm.New(sizeof(TraceNode), TY_OBJECT));
