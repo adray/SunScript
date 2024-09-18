@@ -1097,18 +1097,26 @@ void Parser::ParseYield()
     Expr* expr = ParseCall();
     if (expr)
     {
-        expr->GetCall()->SetYield();
-
-        EmitExpr(expr);
-        FreeExpr(expr);
-
-        if (Match(TokenType::SEMICOLON))
+        Call* call = expr->GetCall();
+        if (call)
         {
-            Advance();
+            call->SetYield();
+
+            EmitExpr(expr);
+            FreeExpr(expr);
+
+            if (Match(TokenType::SEMICOLON))
+            {
+                Advance();
+            }
+            else
+            {
+                SetError("Unexpected token.");
+            }
         }
         else
         {
-            SetError("Unexpected token.");
+            SetError("Unexcepted token.");
         }
     }
     else
@@ -1533,10 +1541,18 @@ void Parser::ParseAssignmentStatement()
             Expr* expr = ParseCall();
             if (expr)
             {
-                expr->GetCall()->SetDiscard();
+                Call* call = expr->GetCall();
+                if (call)
+                {
+                    call->SetDiscard();
 
-                EmitExpr(expr);
-                FreeExpr(expr);
+                    EmitExpr(expr);
+                    FreeExpr(expr);
+                }
+                else
+                {
+                    SetError("Unexpected token.");
+                }
             }
 
             if (Match(TokenType::SEMICOLON))
@@ -1655,6 +1671,12 @@ void Parser::ParseVar()
             {
                 Advance();
                 EmitLocal(Block(), identifier.String());
+
+                const int var = int(top._vars.size());
+
+                StackFrame& frame = _frames.top();
+                frame._vars.insert(std::pair<std::string, int>(identifier.String(), var));
+                frame._scope.top().insert(identifier.String());
             }
             else
             {
