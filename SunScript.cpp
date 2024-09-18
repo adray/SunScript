@@ -805,10 +805,24 @@ inline static void Trace_LoopBack(VirtualMachine* vm, int jump, short offset)
     SetNodeSize(vm, node);
 }
 
-inline static void Trace_PromoteGuard(VirtualMachine* vm, size_t tracePos)
+inline static void Trace_PromoteGuard(VirtualMachine* vm, TraceNode* node, TraceNode* exit)
 {
-    assert(vm->trace[tracePos] == IR_GUARD);
-    vm->trace[tracePos] = IR_LOOPEXIT;
+    //size_t tracePos = node->pos;
+    //assert(vm->trace[tracePos] == IR_GUARD);
+    //vm->trace[tracePos] = IR_LOOPEXIT;
+
+    assert(vm->trace[node->pos] == IR_GUARD);
+
+    const unsigned char jump = vm->trace[node->pos + 1];
+    const short offset = short(exit->ref - node->ref);
+
+    node->pos = vm->trace.size();
+    vm->trace.push_back(IR_LOOPEXIT);
+    vm->trace.push_back(jump);
+    vm->trace.push_back(offset & 0xFF);
+    vm->trace.push_back((offset >> 8) & 0xFF);
+
+    SetNodeSize(vm, node);
 }
 
 inline static void Trace_Guard(VirtualMachine* vm, int jump)
@@ -2001,18 +2015,19 @@ static void Op_Jump(VirtualMachine* vm)
             if (vm->programCounter > loop.end)
             {
                 // We need to promote the guard to a loop exit
-                size_t guardPos = 0;
+                TraceNode* guardNode = nullptr;
                 for (size_t i = 0; i < loop.guards.size(); i++)
                 {
                     auto& guard = loop.guards[i];
                     if (guard.pc == pc)
                     {
-                        guardPos = guard.node->pos;
+                        guardNode = guard.node;
                         break;
                     }
                 }
 
-                Trace_PromoteGuard(vm, guardPos);
+                const int exitRef = loop.endRef->ref + 1;
+                Trace_PromoteGuard(vm, guardNode, vm->tr.nodes[exitRef]);
 
                 // Pop the loop from the stack.
                 vm->tr.loop.resize(vm->tr.loop.size() - 1);

@@ -638,7 +638,7 @@ inline static void vm_cmp_reg_to_reg_x64(unsigned char* program, int& count, cha
 
 inline static void vm_cmp_reg_to_memory_x64(unsigned char* program, int& count, char dst, int dst_offset, char src)
 {
-    vm_emit_bmro(gInstructions[VMI_CMP64_SRC_REG_DST_MEM], program, count, dst, dst_offset, src);
+    vm_emit_bmro(gInstructions[VMI_CMP64_SRC_REG_DST_MEM], program, count, dst, src, dst_offset);
 }
 
 inline static void vm_cmp_memory_to_reg_x64(unsigned char* program, int& count, char dst, char src, int src_offset)
@@ -1222,9 +1222,18 @@ public:
     bool IsRegisterUsed(int reg);
     int StackSize();
     void GetLiveValues(int index, std::vector<JIT_LiveValue>& live);
+    void Dump();
     ~JIT_Analyzer();
 
 private:
+
+    struct Phi
+    {
+        bool init;
+        int left;
+        int right;
+        int ref;
+    };
 
     struct Node
     {
@@ -1523,6 +1532,7 @@ void JIT_Analyzer::AllocateRegister(int ref, int start, int end)
 
 void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
 {
+    std::vector<Phi> phis;
     unsigned int pc = 0;
     int ref = 0;
     while (pc < count)
@@ -1572,11 +1582,26 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             p1 = vm_jit_read_int(ir, &pc);
             break;
         case IR_GUARD:
-        case IR_LOOPEXIT:
             pc++;
+            break;
+        case IR_LOOPEXIT:
+            pc += 3;
             break;
         case IR_LOOPBACK:
             pc += 3;
+            {
+                // Extend the lifetime to end of the loop.
+                for (auto& phi : phis)
+                {
+                    const int maxRef = std::max(phi.left, phi.right);
+                    if (!phi.init && ref > maxRef)
+                    {
+                        liveness[maxRef] = ref - maxRef;
+                        liveness[phi.ref] = ref - phi.ref;
+                        phi.init = true;
+                    }
+                }
+            }
             break;
         case IR_UNARY_MINUS_INT:
             p1 = vm_jit_read_int(ir, &pc);
@@ -1586,6 +1611,13 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
         case IR_PHI:
             p1 = vm_jit_read_int(ir, &pc);
             p2 = vm_jit_read_int(ir, &pc);
+            {
+                Phi& phi = phis.emplace_back();
+                phi.left = p1;
+                phi.right = p2;
+                phi.ref = ref;
+                phi.init = false;
+            }
             break;
         case IR_SNAP:
             pc++; // number
@@ -1641,6 +1673,71 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
     }
 }
 
+void JIT_Analyzer::Dump()
+{
+    const std::string line = "================";
+    std::cout << line << std::endl;
+    for (size_t i = 0; i < liveness.size(); i++)
+    {
+        std::cout << i << " " << liveness[i] << " ";
+        
+        switch (registers[i].reg)
+        {
+        case VM_REGISTER_EAX:
+            std::cout << "EAX";
+            break;
+        case VM_REGISTER_EBX:
+            std::cout << "EBX";
+            break;
+        case VM_REGISTER_ECX:
+            std::cout << "ECX";
+            break;
+        case VM_REGISTER_EDX:
+            std::cout << "EDX";
+            break;
+        case VM_REGISTER_EDI:
+            std::cout << "EDI";
+            break;
+        case VM_REGISTER_EBP:
+            std::cout << "EBP";
+            break;
+        case VM_REGISTER_ESI:
+            std::cout << "ESI";
+            break;
+        case VM_REGISTER_ESP:
+            std::cout << "ESP";
+            break;
+        case VM_REGISTER_R8:
+            std::cout << "R8";
+            break;
+        case VM_REGISTER_R9:
+            std::cout << "R9";
+            break;
+        case VM_REGISTER_R10:
+            std::cout << "R10";
+            break;
+        case VM_REGISTER_R11:
+            std::cout << "R11";
+            break;
+        case VM_REGISTER_R12:
+            std::cout << "R12";
+            break;
+        case VM_REGISTER_R13:
+            std::cout << "R13";
+            break;
+        case VM_REGISTER_R14:
+            std::cout << "R14";
+            break;
+        case VM_REGISTER_R15:
+            std::cout << "R15";
+            break;
+        }
+
+        std::cout << std::endl;
+    }
+    std::cout << line << std::endl;
+}
+
 //===========================================
 
 constexpr int PATCH_INITIALIZED = 0;
@@ -1662,6 +1759,7 @@ struct JIT_ExitJump
     int _type;
     int _size;
     int _offset;
+    int _exitRef;
 };
 
 struct JIT_BackwardJump
@@ -2104,10 +2202,10 @@ static void vm_jit_cmp_int(Jitter* jitter)
     switch (a1.type)
     {
         case ST_REG:
-            vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, a1.reg, a2.reg);
+            vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, a1.reg, dst);
             break;
         case ST_STACK:
-            vm_cmp_reg_to_memory_x64(jitter->jit, jitter->count, a1.reg, a1.pos, a2.reg);
+            vm_cmp_reg_to_memory_x64(jitter->jit, jitter->count, a1.reg, a1.pos, dst);
             break;
     }
 }
@@ -2116,6 +2214,10 @@ static void vm_jit_exitloop(Jitter* jitter)
 {
     const int type = jitter->program[*jitter->pc];
     (*jitter->pc)++;
+    const int offset =
+        short(jitter->program[*jitter->pc]) |
+        short(jitter->program[*jitter->pc + 1]) << 8;
+    (*jitter->pc) += 2;
 
     // Forward jump (requires patching)
 
@@ -2124,6 +2226,7 @@ static void vm_jit_exitloop(Jitter* jitter)
     jump._type = type;
     jump._state = PATCH_INITIALIZED;
     jump._pos = *jitter->pc;
+    jump._exitRef = jitter->refIndex + offset;
 
     // Just emit equals it will be overwritten by the patch process
     vm_jump_equals(jitter->jit, jitter->count, 0);
@@ -2183,7 +2286,9 @@ static void vm_jit_loopback(Jitter* jitter)
     for (size_t i = 0; i < jitter->_trace->_phis.size(); i++)
     {
         auto& phi = jitter->_trace->_phis[i];
-        if (phi._state == PATCH_INITIALIZED)
+        const int maxRef = std::max(phi._left, phi._right);
+        // Apply the PHI node if we have passed both the nodes used in the PHI instruction.
+        if (phi._state == PATCH_INITIALIZED && jitter->refIndex > maxRef)
         {
             phi._state = PATCH_APPLIED;
 
@@ -2192,6 +2297,11 @@ static void vm_jit_loopback(Jitter* jitter)
 
             const int dst = vm_jit_decode_dst(a2);
             vm_jit_mov(jitter, a1, dst);
+
+            if (a2.type == ST_STACK)
+            {
+                vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a2.reg, a2.pos, dst);
+            }
         }
     }
 
@@ -2211,7 +2321,8 @@ static void vm_jit_loopback(Jitter* jitter)
     for (size_t i = 0; i < jitter->_trace->_exitJumps.size(); i++)
     {
         auto& jump = jitter->_trace->_exitJumps[i];
-        if (jump._state == PATCH_INITIALIZED)
+        if (jump._state == PATCH_INITIALIZED &&
+            jump._exitRef == jitter->refIndex)
         {
             jump._state = PATCH_APPLIED;
             
@@ -2681,6 +2792,11 @@ static void vm_jit_phi(VirtualMachine* vm, Jitter* jitter)
 
     const int dst = vm_jit_decode_dst(a2);
     vm_jit_mov(jitter, a1, dst);
+
+    if (a2.type == ST_STACK)
+    {
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a2.reg, a2.pos, dst);
+    }
 }
 
 static void vm_jit_snap(VirtualMachine* vm, Jitter* jitter)
@@ -3294,7 +3410,10 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             std::cout << " IR_UNARY_MINUS_INT " << vm_jit_read_int(trace, &pc) << std::endl;
             break;
         case IR_LOOPEXIT:
-            std::cout << " IR_LOOPEXIT " << int(trace[pc++]) << std::endl;
+            op1 = int(trace[pc++]);
+            offset = short(trace[pc++]);
+            offset |= (short(trace[pc++]) << 8);
+            std::cout << " IR_LOOPEXIT " << op1 << " " << offset << std::endl;
             break;
         case IR_PHI:
             std::cout << " IR_PHI " << vm_jit_read_int(trace, &pc) << " " << vm_jit_read_int(trace, &pc) << std::endl;
@@ -3366,6 +3485,8 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     //===============================
     jitter->_trace->_endTime = clock.now().time_since_epoch().count();
     delete[] jit;
+
+    //jitter->analyzer.Dump();
 
     return jitter->_trace;
 }

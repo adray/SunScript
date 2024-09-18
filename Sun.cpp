@@ -1958,6 +1958,72 @@ void Parser::Parse()
 
 //====================
 
+static SunScript::Program* Compile(Scanner& scanner, std::string* error)
+{
+    SunScript::Program* program = nullptr;
+
+    if (scanner.IsError())
+    {
+        if (error)
+        {
+            std::stringstream ss;
+            ss << "Error Line: " << scanner.ErrorLine() << " " << scanner.Error();
+
+            *error = ss.str();
+        }
+    }
+    else
+    {
+        Parser parser(scanner.Tokens());
+        parser.Parse();
+
+        if (!parser.IsError())
+        {
+            program = parser.GetProgram();
+        }
+        else if (error)
+        {
+            std::stringstream ss;
+            ss << "Error Line: " << parser.ErrorLine() << " " << parser.Error();
+
+            *error = ss.str();
+        }
+    }
+
+    return program;
+}
+
+void SunScript::CompileText(const std::string& scriptText,
+    unsigned char** programData, unsigned char** debugData,
+    int* programSize, int* debugSize, std::string* error)
+{
+    SunScript::Program* program = nullptr;
+
+    Scanner scanner;
+    std::stringstream ss(scriptText);
+
+    const int size = 512;
+    char line[size];
+
+    while (!ss.eof())
+    {
+        ss.getline(line, size);
+        scanner.ScanLine(line);
+    }
+
+    program = Compile(scanner, error);
+
+    if (program)
+    {
+        *programSize = GetProgram(program, programData);
+
+        if (debugData)
+        {
+            *debugSize = GetDebugData(program, debugData);
+        }
+    }
+}
+
 static SunScript::Program* CompileFile2(const std::string& filepath, std::string* error)
 {
     SunScript::Program* program = nullptr;
@@ -1977,33 +2043,7 @@ static SunScript::Program* CompileFile2(const std::string& filepath, std::string
             scanner.ScanLine(line);
         }
 
-        if (scanner.IsError())
-        {
-            if (error)
-            {
-                std::stringstream ss;
-                ss << "Error Line: " << scanner.ErrorLine() << " " << scanner.Error();
-
-                *error = ss.str();
-            }
-        }
-        else
-        {
-            Parser parser(scanner.Tokens());
-            parser.Parse();
-
-            if (!parser.IsError())
-            {
-                program = parser.GetProgram();
-            }
-            else if (error)
-            {
-                std::stringstream ss;
-                ss << "Error Line: " << parser.ErrorLine() << " " << parser.Error();
-
-                *error = ss.str();
-            }
-        }
+        program = Compile(scanner, error);
     }
     else
     {
