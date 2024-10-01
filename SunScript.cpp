@@ -1025,7 +1025,7 @@ inline static void Trace_Done(VirtualMachine* vm)
 
     vm->trace.push_back(IR_SNAP);
     vm->trace.push_back(char(vm->tt.curTrace->snaps.size() - 1));
-    vm->trace.push_back(unsigned char(snap.locals.size()));
+    vm->trace.push_back(static_cast<unsigned char>(snap.locals.size()));
     vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
@@ -1063,11 +1063,11 @@ inline static void Trace_Snap(VirtualMachine* vm)
 
         vm->trace.push_back(IR_SNAP);
         vm->trace.push_back(char(vm->tt.curTrace->snaps.size() - 1));
-        vm->trace.push_back(unsigned char(snap.locals.size()));
+        vm->trace.push_back(static_cast<unsigned char>(snap.locals.size()));
 
         for (auto& local : snap.locals)
         {
-            vm->trace.push_back(unsigned char(local.ref->ref));
+            vm->trace.push_back(static_cast<unsigned char>(local.ref->ref));
         }
 
         vm->tt.curTrace->ref++;
@@ -1089,7 +1089,7 @@ inline static void Trace_Unbox(VirtualMachine* vm, int type)
 
     vm->trace.push_back(IR_UNBOX);
     Trace_Int(vm, n->left->ref);
-    vm->trace.push_back(unsigned char(type));
+    vm->trace.push_back(static_cast<unsigned char>(type));
     vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, n);
