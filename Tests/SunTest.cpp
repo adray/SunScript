@@ -121,14 +121,14 @@ static void DumpStack(Callstack* s)
     }
 }
 
-static void* CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size)
+static void* CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size, int traceId)
 {
     const std::string line = "=======================";
-    std::cout << std::endl << line << std::endl;
+    std::cout << std::endl << line << std::endl << "Trace " << traceId << std::endl;
     JIT_DumpTrace(trace, size);
     std::cout << line << std::endl;
 
-    return JIT_CompileTrace(instance, vm, trace, size);
+    return JIT_CompileTrace(instance, vm, trace, size, traceId);
 }
 
 static int RunTest(SunTestSuite* suite, SunTest* test)

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <format>
 #include <assert.h>
+#include <array>
 
 using namespace SunScript;
 
@@ -14,24 +15,6 @@ using namespace SunScript;
 
 namespace SunScript
 {
-//===================
-// Snapshot
-//===================
-
-void Snapshot::Add(int ref, int64_t value)
-{
-    Snapshot::Value& val = _values.emplace_back();
-    val._ref = ref;
-    val._value = value;
-}
-
-void Snapshot::Get(int idx, int* ref, int64_t* value) const
-{
-    const Snapshot::Value& val = _values[idx];
-    *ref = val._ref;
-    *value = val._value;
-}
-
 //===================
 // MemoryManager
 //===================
@@ -157,6 +140,55 @@ void Snapshot::Get(int idx, int* ref, int64_t* value) const
         }
     }
 
+    //===================
+    // Snapshot
+    //===================
+
+    Snapshot::Snapshot(int numValues, MemoryManager* mm)
+        :
+        _numValues(numValues),
+        _index(0)
+    {
+        _values = reinterpret_cast<Value*>(mm->New(numValues * sizeof(Value), TY_OBJECT));
+    }
+
+    void Snapshot::Add(int ref, int64_t value)
+    {
+        Snapshot::Value& val = _values[_index++];
+        val._ref = ref;
+        val._value = value;
+    }
+
+    void Snapshot::Get(int idx, int* ref, int64_t* value) const
+    {
+        const Snapshot::Value& val = _values[idx];
+        *ref = val._ref;
+        *value = val._value;
+    }
+
+    //=====================
+    // ActivationRecord
+    //=====================
+
+    ActivationRecord::ActivationRecord(int numItems, MemoryManager* mm)
+    {
+        _buffer = reinterpret_cast<unsigned char*>(mm->New(numItems * 16, TY_OBJECT));
+    }
+
+    void ActivationRecord::Add(int id, int type, void* data)
+    {
+        const int pos = id * 16;
+        *(int64_t*)(_buffer + pos) = id;
+        switch (type)
+        {
+        case TY_INT:
+            *(int64_t*)(_buffer + pos + 8) = *(int64_t*)data;
+            break;
+        case TY_STRING:
+            *(char**)(_buffer + pos + 8) = (char*)data;
+            break;
+        }
+    }
 //============================
 
     class Stack
@@ -239,10 +271,15 @@ void Snapshot::Get(int idx, int* ref, int64_t* value) const
 
 //============================
 
-    unsigned int TR_FLAG_LEFT_DIRTY = 0x1;
-    unsigned int TR_FLAG_RIGHT_DIRTY = 0x2;
+    constexpr unsigned int TR_FLAG_LEFT_DIRTY = 0x1;
+    constexpr unsigned int TR_FLAG_RIGHT_DIRTY = 0x2;
 
-    unsigned int SN_NEEDED = 0x1;
+    constexpr unsigned int SN_NEEDED = 0x1; // snapshot needed
+    constexpr unsigned int MAX_TRACES = 32;
+    
+    constexpr int HOT_COUNT = 100;          // the number of invokes of script to consider the script 'hot'
+    constexpr int MIN_TRACE_SIZE = 12;      // the minimum size of a trace to compile it
+    constexpr int MAX_TRACE_SIZE = 200;     // the maximum size of a trace
 
     struct StackFrame
     {
@@ -310,6 +347,7 @@ void Snapshot::Get(int idx, int* ref, int64_t* value) const
         TraceNode* endRef;              // end reference
         unsigned int start;             // start program
         unsigned int end;               // end program
+        bool active;
         std::vector<TraceGuard> guards;
         std::vector<TraceLocal> locals;
 
@@ -318,7 +356,8 @@ void Snapshot::Get(int idx, int* ref, int64_t* value) const
             startRef(0),
             endRef(0),
             start(0),
-            end(0)
+            end(0),
+            active(false)
         {}
     };
 
@@ -334,33 +373,68 @@ void Snapshot::Get(int idx, int* ref, int64_t* value) const
         std::vector<StackFrame> frames;
         std::vector<Local> locals;
 
-        TraceSnapshot() : pc(0) {}
+        TraceSnapshot()
+            :
+            pc(0)
+        {}
     };
 
     struct Trace
     {
         MemoryManager mm;
         std::vector<TraceNode*> nodes;
-        std::vector<TraceLoop> loop;        // loops
         std::vector<TraceNode*> locals;     // local -> ref mapping
         std::vector<TraceNode*> refs;       // stack of refs
         std::vector<TraceSnapshot> snaps;
         std::vector<unsigned char> trace;   // completed trace
+        TraceLoop loop;                     // current loop
         int ref;                            // current ref index
         int flags;
+        int pc;                             // the pc point where
+                                            // the trace starts
+        int id;                             // trace id
+        void* jit_trace;
 
-        Trace() : ref(0), flags(0) {}
+        Trace()
+            :
+            ref(0),
+            flags(0),
+            pc(0),
+            id(0),
+            jit_trace(nullptr)
+        {}
+
+        void Reset()
+        {
+            mm.Reset();
+            *this = Trace();
+        }
+    };
+
+    struct TraceTree
+    {
+        std::array<Trace, MAX_TRACES> traces;
+        int numTraces;
+        Trace* curTrace;
+
+        TraceTree()
+            :
+            numTraces(0),
+            curTrace(nullptr)
+        {}
     };
 
     struct VirtualMachine
     {
         unsigned char* program;
-        unsigned int programCounter;
-        unsigned int programOffset;
+        unsigned int programCounter;        // the position in the current program
+        unsigned int programInstruction;    // the position of the start of the current instruction
+        unsigned int programOffset;         // offset in program data where the program starts
         int* debugLines;
         bool running;
         bool tracing;
         bool tracingPaused;
+        bool hot;
         int statusCode;
         int errorCode;
         int resumeCode;
@@ -383,12 +457,11 @@ void Snapshot::Get(int idx, int* ref, int64_t* value) const
         std::vector<Function> functions;
         std::vector<void*> locals;
         std::vector<unsigned char> trace;
-        Trace tr;
+        TraceTree tt;
         int (*handler)(VirtualMachine* vm);
         Jit jit;
         void* jit_instance;
         void* _userData;
-        void* jit_trace;
     };
 
     struct ProgramBlock
@@ -507,14 +580,14 @@ inline static void RecordReturn(FunctionInfo* info, unsigned int pc, char type)
 
 inline static TraceNode* Trace_CreateNode(VirtualMachine* vm, const int type)
 {
-    TraceNode* node = reinterpret_cast<TraceNode*>(vm->tr.mm.New(sizeof(TraceNode), TY_OBJECT));
+    TraceNode* node = reinterpret_cast<TraceNode*>(vm->tt.curTrace->mm.New(sizeof(TraceNode), TY_OBJECT));
     std::memset(node, 0, sizeof(TraceNode));
     node->pos = vm->trace.size();
-    node->ref = vm->tr.ref;
+    node->ref = vm->tt.curTrace->ref;
     node->flags = 0;
     node->pc = vm->programCounter;
     node->type = type;
-    vm->tr.nodes.push_back(node);
+    vm->tt.curTrace->nodes.push_back(node);
 
     return node;
 }
@@ -524,15 +597,74 @@ inline static void SetNodeSize(VirtualMachine* vm, TraceNode* node)
     node->size = vm->trace.size() - node->pos;
 }
 
-inline static void Trace_Initialize(VirtualMachine* vm)
+inline static void Trace_Suspend(VirtualMachine* vm)
 {
-    vm->tr.ref = 0;
-    vm->tr.flags = SN_NEEDED;
+    Trace* trace = vm->tt.curTrace;
+    trace->trace.resize(vm->trace.size());
+    std::memcpy(trace->trace.data(), vm->trace.data(), vm->trace.size());
+    vm->tracingPaused = true;
+}
+
+inline static void Trace_Start(VirtualMachine* vm)
+{
+    vm->tt.curTrace = &vm->tt.traces[vm->tt.numTraces++];
+    vm->tt.curTrace->ref = 0;
+    vm->tt.curTrace->flags = SN_NEEDED;
+    vm->tt.curTrace->pc = vm->programInstruction;
+    vm->tt.curTrace->refs.clear();
+    vm->tt.curTrace->locals.resize(vm->locals.size());
+    vm->tt.curTrace->snaps.clear();
+    vm->tt.curTrace->nodes.clear();
+    vm->tt.curTrace->id = vm->tt.numTraces - 1;
+
     vm->tracing = true;
     vm->tracingPaused = false;
     vm->trace.clear();
-    vm->tr.refs.clear();
-    vm->tr.locals.resize(vm->locals.size());
+    
+    // Setup locals for the new trace.
+    for (size_t i = 0; i < vm->locals.size(); i++)
+    {
+        void* local = vm->locals[i];
+        if (local)
+        {
+            const int type = vm->mm.GetType(local);
+            TraceNode* node = Trace_CreateNode(vm, type);
+            switch (type)
+            {
+            case TY_STRING:
+                vm->trace.push_back(IR_LOAD_STRING_LOCAL);
+                vm->trace.push_back(static_cast<unsigned char>(i));
+                break;
+            case TY_INT:
+                vm->trace.push_back(IR_LOAD_INT_LOCAL);
+                vm->trace.push_back(static_cast<unsigned char>(i));
+                break;
+            default:
+                abort();
+            }
+            vm->tt.curTrace->locals[i] = node;
+            vm->tt.curTrace->ref++;
+
+            SetNodeSize(vm, node);
+        }
+    }
+}
+
+inline static void Trace_Abort(VirtualMachine* vm)
+{
+    vm->tracing = false;
+
+    Trace* trace = vm->tt.curTrace;
+    trace->Reset();
+
+    vm->tt.numTraces--;
+}
+
+inline static void Trace_Restore(VirtualMachine* vm, Trace* trace)
+{
+    vm->tt.curTrace = trace;
+    vm->trace.resize(trace->trace.size());
+    std::memcpy(vm->trace.data(), trace->trace.data(), trace->trace.size());
 }
 
 inline static void Trace_Int(VirtualMachine* vm, int val)
@@ -558,8 +690,8 @@ inline static void Trace_LoadC_Int(VirtualMachine* vm, int val)
 
     vm->trace.push_back(IR_LOAD_INT);
     Trace_Int(vm, val);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -570,8 +702,8 @@ inline static void Trace_LoadC_String(VirtualMachine* vm, const char* str)
 
     vm->trace.push_back(IR_LOAD_STRING);
     Trace_String(vm, str);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -579,41 +711,41 @@ inline static void Trace_LoadC_String(VirtualMachine* vm, const char* str)
 inline static void Trace_Push_Local(VirtualMachine* vm, int local)
 {
     // Push the ref currently associated with the local to the stack.
-    vm->tr.refs.push_back(vm->tr.locals[local]);
+    vm->tt.curTrace->refs.push_back(vm->tt.curTrace->locals[local]);
 }
 
 inline static void Trace_Pop(VirtualMachine* vm, int local)
 {
     // Update the local to point to the ref on the top of the stack.
-    vm->tr.locals[local] = vm->tr.refs[vm->tr.refs.size() - 1];
-    vm->tr.refs.resize(vm->tr.refs.size() - 1);
-    vm->tr.flags |= SN_NEEDED;
+    vm->tt.curTrace->locals[local] = vm->tt.curTrace->refs[vm->tt.curTrace->refs.size() - 1];
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
+    vm->tt.curTrace->flags |= SN_NEEDED;
 }
 
 inline static void Trace_Pop_Discard(VirtualMachine* vm)
 {
     // Discard the top of the stack.
-    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
 }
 
 inline static void Trace_Arg_String(VirtualMachine* vm)
 {
-    auto& node = vm->tr.nodes[vm->tr.nodes.size() - 1];
+    auto& node = vm->tt.curTrace->nodes[vm->tt.curTrace->nodes.size() - 1];
 
     vm->trace.push_back(TY_STRING);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
 
     SetNodeSize(vm, node);
 }
 
 inline static void Trace_Arg_Int(VirtualMachine* vm)
 {
-    auto& node = vm->tr.nodes[vm->tr.nodes.size() - 1];
+    auto& node = vm->tt.curTrace->nodes[vm->tt.curTrace->nodes.size() - 1];
 
     vm->trace.push_back(TY_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 1);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
 
     SetNodeSize(vm, node);
 }
@@ -625,7 +757,7 @@ inline static void Trace_Call(VirtualMachine* vm, int call, int args)
     vm->trace.push_back(IR_CALL);
     Trace_Int(vm, call);
     vm->trace.push_back(args);
-    vm->tr.ref++;
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -637,7 +769,7 @@ inline static void Trace_Yield(VirtualMachine* vm, int call, int args)
     vm->trace.push_back(IR_YIELD);
     Trace_Int(vm, call);
     vm->trace.push_back(args);
-    vm->tr.ref++;
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -645,13 +777,13 @@ inline static void Trace_Yield(VirtualMachine* vm, int call, int args)
 inline static void Trace_Increment_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_INT);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
 
     vm->trace.push_back(IR_INCREMENT_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 1);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -659,13 +791,13 @@ inline static void Trace_Increment_Int(VirtualMachine* vm)
 inline static void Trace_Decrement_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_INT);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
 
     vm->trace.push_back(IR_DECREMENT_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 1);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -673,15 +805,15 @@ inline static void Trace_Decrement_Int(VirtualMachine* vm)
 inline static void Trace_Add_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_INT);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
-    node->right = vm->tr.refs.at(vm->tr.refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
 
     vm->trace.push_back(IR_ADD_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 2);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -689,15 +821,15 @@ inline static void Trace_Add_Int(VirtualMachine* vm)
 inline static void Trace_Sub_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_INT);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
-    node->right = vm->tr.refs.at(vm->tr.refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
 
     vm->trace.push_back(IR_SUB_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 2);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -705,15 +837,15 @@ inline static void Trace_Sub_Int(VirtualMachine* vm)
 inline static void Trace_Mul_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_INT);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
-    node->right = vm->tr.refs.at(vm->tr.refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
 
     vm->trace.push_back(IR_MUL_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 2);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -721,15 +853,15 @@ inline static void Trace_Mul_Int(VirtualMachine* vm)
 inline static void Trace_Div_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_INT);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
-    node->right = vm->tr.refs.at(vm->tr.refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
 
     vm->trace.push_back(IR_DIV_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 2);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -737,15 +869,15 @@ inline static void Trace_Div_Int(VirtualMachine* vm)
 inline static void Trace_App_String_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_STRING);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
-    node->right = vm->tr.refs.at(vm->tr.refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
 
     vm->trace.push_back(IR_APP_STRING_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 2);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -753,15 +885,15 @@ inline static void Trace_App_String_Int(VirtualMachine* vm)
 inline static void Trace_App_Int_String(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_STRING);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
-    node->right = vm->tr.refs.at(vm->tr.refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
 
     vm->trace.push_back(IR_APP_INT_STRING);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 2);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -769,15 +901,15 @@ inline static void Trace_App_Int_String(VirtualMachine* vm)
 inline static void Trace_App_String_String(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_STRING);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
-    node->right = vm->tr.refs.at(vm->tr.refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
 
     vm->trace.push_back(IR_APP_STRING_STRING);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 2);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -787,7 +919,7 @@ inline static void Trace_LoopStart(VirtualMachine* vm)
     TraceNode* node = Trace_CreateNode(vm, TY_VOID);
 
     vm->trace.push_back(IR_LOOPSTART);
-    vm->tr.ref++;
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -800,7 +932,7 @@ inline static void Trace_LoopBack(VirtualMachine* vm, int jump, short offset)
     vm->trace.push_back(jump & 0xFF);
     vm->trace.push_back(offset & 0xFF);
     vm->trace.push_back((offset >> 8) & 0xFF);
-    vm->tr.ref++;
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -831,7 +963,7 @@ inline static void Trace_Guard(VirtualMachine* vm, int jump)
 
     vm->trace.push_back(IR_GUARD);
     vm->trace.push_back(jump & 0xFF);
-    vm->tr.ref++;
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -839,14 +971,14 @@ inline static void Trace_Guard(VirtualMachine* vm, int jump)
 inline static void Trace_Cmp_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_VOID);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 2);
-    node->right = vm->tr.refs.at(vm->tr.refs.size() - 1);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
 
     vm->trace.push_back(IR_CMP_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2)->ref);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 2);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -854,14 +986,14 @@ inline static void Trace_Cmp_Int(VirtualMachine* vm)
 inline static void Trace_Cmp_String(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_VOID);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
-    node->right = vm->tr.refs.at(vm->tr.refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
 
     vm->trace.push_back(IR_CMP_STRING);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 2)->ref);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 2);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
@@ -869,22 +1001,41 @@ inline static void Trace_Cmp_String(VirtualMachine* vm)
 inline static void Trace_Unary_Minus_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_INT);
-    node->left = vm->tr.refs.at(vm->tr.refs.size() - 1);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
 
     vm->trace.push_back(IR_UNARY_MINUS_INT);
-    Trace_Int(vm, vm->tr.refs.at(vm->tr.refs.size() - 1)->ref);
-    vm->tr.refs.resize(vm->tr.refs.size() - 1);
-    vm->tr.refs.push_back(node);
-    vm->tr.ref++;
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+}
+
+inline static void Trace_Done(VirtualMachine* vm)
+{
+    // Take a snapshot:
+    // However this is end of the program, so no variables
+    // need to be captured we just need need to report
+    // it is the end.
+
+    TraceNode* node = Trace_CreateNode(vm, TY_VOID);
+    TraceSnapshot& snap = vm->tt.curTrace->snaps.emplace_back();
+    snap.pc = vm->programInstruction;
+
+    vm->trace.push_back(IR_SNAP);
+    vm->trace.push_back(char(vm->tt.curTrace->snaps.size() - 1));
+    vm->trace.push_back(unsigned char(snap.locals.size()));
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
 }
 
 inline static void Trace_Snap(VirtualMachine* vm)
 {
-    if ((vm->tr.flags & SN_NEEDED) == SN_NEEDED)
+    if ((vm->tt.curTrace->flags & SN_NEEDED) == SN_NEEDED)
     {
-        vm->tr.flags &= ~SN_NEEDED;
+        vm->tt.curTrace->flags &= ~SN_NEEDED;
 
         // Take a snapshot:
         // We need to record all variables as we don't know
@@ -892,15 +1043,15 @@ inline static void Trace_Snap(VirtualMachine* vm)
 
         TraceNode* node = Trace_CreateNode(vm, TY_VOID);
 
-        TraceSnapshot& snap = vm->tr.snaps.emplace_back();
-        snap.pc = vm->programCounter;
+        TraceSnapshot& snap = vm->tt.curTrace->snaps.emplace_back();
+        snap.pc = vm->programInstruction;
         for (auto& frame : vm->frames)
         {
             snap.frames.emplace_back(frame);
         }
-        for (size_t i = 0; i < vm->tr.locals.size(); i++)
+        for (size_t i = 0; i < vm->tt.curTrace->locals.size(); i++)
         {
-            TraceNode* node = vm->tr.locals[i];
+            TraceNode* node = vm->tt.curTrace->locals[i];
 
             if (node)
             {
@@ -911,7 +1062,7 @@ inline static void Trace_Snap(VirtualMachine* vm)
         }
 
         vm->trace.push_back(IR_SNAP);
-        vm->trace.push_back(char(vm->tr.snaps.size() - 1));
+        vm->trace.push_back(char(vm->tt.curTrace->snaps.size() - 1));
         vm->trace.push_back(unsigned char(snap.locals.size()));
 
         for (auto& local : snap.locals)
@@ -919,7 +1070,7 @@ inline static void Trace_Snap(VirtualMachine* vm)
             vm->trace.push_back(unsigned char(local.ref->ref));
         }
 
-        vm->tr.ref++;
+        vm->tt.curTrace->ref++;
 
         SetNodeSize(vm, node);
     }
@@ -927,19 +1078,19 @@ inline static void Trace_Snap(VirtualMachine* vm)
 
 inline static void Trace_Unbox(VirtualMachine* vm, int type)
 {
-    TraceNode* left = vm->tr.nodes[vm->tr.nodes.size() - 1];
+    TraceNode* left = vm->tt.curTrace->nodes[vm->tt.curTrace->nodes.size() - 1];
 
     TraceNode* n = Trace_CreateNode(vm, type);
     while (vm->trace[left->pos] != IR_CALL)
     {
-        left = vm->tr.nodes[left->ref - 1];
+        left = vm->tt.curTrace->nodes[left->ref - 1];
     }
     n->left = left;
 
     vm->trace.push_back(IR_UNBOX);
     Trace_Int(vm, n->left->ref);
     vm->trace.push_back(unsigned char(type));
-    vm->tr.ref++;
+    vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, n);
 }
@@ -950,7 +1101,7 @@ inline static void Trace_ReturnValue(VirtualMachine* vm, int type)
     Trace_Unbox(vm, type);
 
     // Push the ref which has pushed onto the stack by the function call.
-    vm->tr.refs.push_back(vm->tr.nodes[vm->tr.ref - 1]);
+    vm->tt.curTrace->refs.push_back(vm->tt.curTrace->nodes[vm->tt.curTrace->ref - 1]);
 }
 
 static void UpdateLeftNode(VirtualMachine* vm, TraceNode* node)
@@ -977,17 +1128,38 @@ static void Trace_Finalize(VirtualMachine* vm)
     // Process the nodes and copy the data over to a new buffer.
     // The nodes may have be rearranged and thus the data need reordering.
 
-    vm->tr.trace.resize(vm->trace.size());
+    vm->tt.curTrace->trace.resize(vm->trace.size());
     size_t pos = 0;
-    for (TraceNode* node : vm->tr.nodes)
+    for (TraceNode* node : vm->tt.curTrace->nodes)
     {
         if ((node->flags & TR_FLAG_LEFT_DIRTY) == TR_FLAG_LEFT_DIRTY) { UpdateLeftNode(vm, node); }
         if ((node->flags & TR_FLAG_RIGHT_DIRTY) == TR_FLAG_RIGHT_DIRTY) { UpdateRightNode(vm, node); }
 
-        std::memcpy(vm->tr.trace.data() + pos, vm->trace.data() + node->pos, node->size);
+        std::memcpy(vm->tt.curTrace->trace.data() + pos, vm->trace.data() + node->pos, node->size);
         pos += node->size;
     }
-    vm->tr.trace.resize(pos);
+    vm->tt.curTrace->trace.resize(pos);
+}
+
+static void Trace_Compile(VirtualMachine* vm)
+{
+    for (size_t i = 0; i < vm->tt.numTraces; i++)
+    {
+        Trace* trace = &vm->tt.traces[i];
+        if (trace->nodes.size() >= MIN_TRACE_SIZE)
+        {
+            trace->jit_trace = vm->jit.jit_compile_trace(
+                vm->jit_instance,
+                vm,
+                trace->trace.data(),
+                int(trace->trace.size()),
+                int(i)
+            );
+
+            // Set the instruction to trigger executing the trace.
+            vm->program[trace->pc] = (~MK_LOOPSTART & vm->program[trace->pc]) | MK_TRACESTART;
+        }
+    }
 }
 
 //===================
@@ -1041,9 +1213,8 @@ VirtualMachine* SunScript::CreateVirtualMachine()
     vm->program = nullptr;
     vm->debugLines = nullptr;
     vm->comparer = 0;
-    vm->jit_trace = nullptr;
     std::memset(&vm->jit, 0, sizeof(vm->jit));
-   return vm;
+    return vm;
 }
 
 void SunScript::ShutdownVirtualMachine(VirtualMachine* vm)
@@ -1334,13 +1505,13 @@ static void Op_Call(VirtualMachine* vm)
             
             if (vm->tracing)
             {
-                vm->tr.locals.resize(vm->locals.size());
-                vm->tr.flags |= SN_NEEDED; // we need a new snapshot to reflect the change in frames
+                vm->tt.curTrace->locals.resize(vm->locals.size());
+                vm->tt.curTrace->flags |= SN_NEEDED; // we need a new snapshot to reflect the change in frames
 
                 if (blk.info.depth >= 1)
                 {
                     // Recursive functions don't work for now.. abort the trace
-                    vm->tracing = false;
+                    Trace_Abort(vm);
                 }
             }
 
@@ -1824,7 +1995,7 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
             if (local.minRef && local.maxRef && local.minRef->ref < local.maxRef->ref)
             {
                 // Generate a Phi node
-                TraceNode* phi = reinterpret_cast<TraceNode*>(vm->tr.mm.New(sizeof(TraceNode), TY_OBJECT));
+                TraceNode* phi = reinterpret_cast<TraceNode*>(vm->tt.curTrace->mm.New(sizeof(TraceNode), TY_OBJECT));
                 phi->left = local.minRef;
                 phi->right = local.maxRef;
                 phi->pos = vm->trace.size();
@@ -1832,12 +2003,12 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
                 phi->flags = 0;
                 phi->pc = vm->programCounter;
                 phi->type = TY_VOID;
-                vm->tr.nodes.insert(vm->tr.nodes.begin() + loop.startRef->ref + numPhiNodesInserted, phi);
+                vm->tt.curTrace->nodes.insert(vm->tt.curTrace->nodes.begin() + loop.startRef->ref + numPhiNodesInserted, phi);
 
                 vm->trace.push_back(IR_PHI);
                 Trace_Int(vm, local.minRef->ref);
                 Trace_Int(vm, local.maxRef->ref + numNodes);
-                vm->tr.ref++;
+                vm->tt.curTrace->ref++;
 
                 phi->size = vm->trace.size() - phi->pos;
                 numPhiNodesInserted++;
@@ -1845,20 +2016,20 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
         }
 
         // Update the nodes after the PHI nodes were inserted at
-        for (size_t i = loop.startRef->ref + numNodes; i < vm->tr.nodes.size(); i++)
+        for (size_t i = loop.startRef->ref + numNodes; i < vm->tt.curTrace->nodes.size(); i++)
         {
-            TraceNode* node = vm->tr.nodes[i];
+            TraceNode* node = vm->tt.curTrace->nodes[i];
             node->ref += numNodes;
         }
 
         for (size_t i = loop.startRef->ref - numNodes; i < loop.startRef->ref; i++) // loop over the PHI nodes
         {
-            TraceNode* phi = vm->tr.nodes[i];
+            TraceNode* phi = vm->tt.curTrace->nodes[i];
 
             // We need to update the nodes left/right so we are inserted between
-            for (size_t j = loop.startRef->ref; j < vm->tr.nodes.size(); j++) // nodes from after the PHI nodes to the end
+            for (size_t j = loop.startRef->ref; j < vm->tt.curTrace->nodes.size(); j++) // nodes from after the PHI nodes to the end
             {
-                TraceNode* node = vm->tr.nodes[j];
+                TraceNode* node = vm->tt.curTrace->nodes[j];
                 if (node->left == phi->left || node->left == phi->right)
                 {
                     node->left = phi;
@@ -1875,6 +2046,109 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
                 // TODO: patch snapshots
             }
         }
+    }
+}
+
+static void HotLoop(VirtualMachine* vm, int type, int pc, int offset, bool branchDir)
+{
+    if (vm->tracing)
+    {
+        if (offset < 0)
+        {
+            auto& loop = vm->tt.curTrace->loop;
+            if (loop.active)
+            {
+                loop.endRef = vm->tt.curTrace->nodes[vm->tt.curTrace->ref - 1];
+                loop.end = pc;
+
+                Trace_LoopBack(vm, type, loop.startRef->ref - vm->tt.curTrace->ref);
+
+                // Record the last used instance of variables.
+                for (size_t i = 0; i < vm->tt.curTrace->locals.size(); i++)
+                {
+                    loop.locals[i].maxRef = vm->tt.curTrace->locals[i];
+                }
+
+                ComputePhis(vm, loop);
+
+                // Pause the tracing for the duration of the loop.
+                vm->tracing = false;
+                vm->tracingPaused = true;
+            }
+            else
+            {
+                Trace_Abort(vm);
+
+            }
+        }
+        else if (type != JUMP)
+        {
+            Trace_Snap(vm);
+
+            if (branchDir)
+            {
+                Trace_Guard(vm, Flip(type));
+            }
+            else
+            {
+                Trace_Guard(vm, type);
+            }
+
+            if (vm->tt.curTrace->loop.active)
+            {
+                auto& loop = vm->tt.curTrace->loop;
+                auto& guard = loop.guards.emplace_back();
+                guard.pc = pc;
+                guard.node = vm->tt.curTrace->nodes[vm->tt.curTrace->ref - 1];
+            }
+        }
+    }
+    else if (vm->tracingPaused)
+    {
+        // Check if we are leaving the loop
+        if (branchDir)
+        {
+            // To be certain we need to check the pc is now beyond the
+            // end of the loop
+            auto& loop = vm->tt.curTrace->loop;
+            if (loop.active && vm->programCounter > loop.end)
+            {
+                // We need to promote the guard to a loop exit
+                TraceNode* guardNode = nullptr;
+                for (size_t i = 0; i < loop.guards.size(); i++)
+                {
+                    auto& guard = loop.guards[i];
+                    if (guard.pc == pc)
+                    {
+                        guardNode = guard.node;
+                        break;
+                    }
+                }
+
+                // Disable the loop now it is done.
+                loop.active = false;
+
+                const int exitRef = loop.endRef->ref + 1;
+                assert(guardNode);
+                Trace_PromoteGuard(vm, guardNode, vm->tt.curTrace->nodes[exitRef]);
+
+                // Complete tracing the loop and start a new trace.
+                vm->programInstruction = vm->programCounter;
+                Trace_Snap(vm);
+                Trace_Finalize(vm);
+                Trace_Start(vm);
+            }
+        }
+    }
+
+    if (offset > 0 && branchDir && !vm->tracing && !vm->tracingPaused)
+    {
+        // Tracing startpoint. This may be loop exit or an jump
+        // within an if. We are not interested in the later, but it doesn't
+        // harm creating a trace starting there.
+
+        vm->programInstruction = vm->programCounter;
+        Trace_Start(vm);
     }
 }
 
@@ -1960,83 +2234,9 @@ static void Op_Jump(VirtualMachine* vm)
         }
     }
 
-    if (vm->tracing)
+    if (vm->hot)
     {
-        if (offset < 0)
-        {
-            auto& loop = vm->tr.loop[vm->tr.loop.size() - 1];
-            loop.endRef = vm->tr.nodes[vm->tr.ref - 1];
-            loop.end = pc;
-
-            Trace_LoopBack(vm, type, loop.startRef->ref - vm->tr.ref);
-
-            // Record the last used instance of variables.
-            for (size_t i = 0; i < vm->tr.locals.size(); i++)
-            {
-                loop.locals[i].maxRef = vm->tr.locals[i];
-            }
-
-            ComputePhis(vm, loop);
-
-            // Pause the tracing for the duration of the loop.
-            vm->tracing = false;
-            vm->tracingPaused = true;
-        }
-        else if (type != JUMP)
-        {
-            Trace_Snap(vm);
-
-            if (branchDir)
-            {
-                Trace_Guard(vm, Flip(type));
-            }
-            else
-            {
-                Trace_Guard(vm, type);
-            }
-
-            if (vm->tr.loop.size() > 0)
-            {
-                auto& loop = vm->tr.loop[vm->tr.loop.size() - 1];
-                auto& guard = loop.guards.emplace_back();
-                guard.pc = pc;
-                guard.node = vm->tr.nodes[vm->tr.ref - 1];
-            }
-        }
-    }
-    else if (vm->tracingPaused)
-    {
-        // Check if we are leaving the loop
-        if (branchDir)
-        {
-            // To be certain we need to check the pc is now beyond the
-            // end of the loop
-            auto& loop = vm->tr.loop[vm->tr.loop.size() - 1];
-            if (vm->programCounter > loop.end)
-            {
-                // We need to promote the guard to a loop exit
-                TraceNode* guardNode = nullptr;
-                for (size_t i = 0; i < loop.guards.size(); i++)
-                {
-                    auto& guard = loop.guards[i];
-                    if (guard.pc == pc)
-                    {
-                        guardNode = guard.node;
-                        break;
-                    }
-                }
-
-                const int exitRef = loop.endRef->ref + 1;
-                Trace_PromoteGuard(vm, guardNode, vm->tr.nodes[exitRef]);
-
-                // Pop the loop from the stack.
-                vm->tr.loop.resize(vm->tr.loop.size() - 1);
-                
-                // Enable tracing
-                vm->tracing = true;
-                vm->tracingPaused = false;
-            }
-        }
+        HotLoop(vm, type, pc, offset, branchDir);
     }
 }
 
@@ -2078,6 +2278,7 @@ static void ResetVM(VirtualMachine* vm)
     vm->programCounter = 0;
     vm->tracing = false;
     vm->tracingPaused = false;
+    vm->hot = false;
     vm->stackBounds = 0;
     vm->errorCode = 0;
     vm->flags = 0;
@@ -2192,21 +2393,61 @@ static void LoopStart(VirtualMachine* vm)
 {
     if (vm->tracing)
     {
+        if (vm->tt.curTrace->loop.active)
+        {
+            // If there is already a loop in this trace abort the trace
+            // and attempt to trace the inner loop.
+            Trace_Abort(vm);
+            Trace_Start(vm);
+        }
+        else
+        {
+            // Otherwise finish the current trace and start a new trace for the loop.
+            Trace_Snap(vm);
+            Trace_Finalize(vm);
+            Trace_Start(vm);
+        }
+
         Trace_LoopStart(vm);
 
-        auto& pt = vm->tr.loop.emplace_back();
-        pt.startRef = vm->tr.nodes[vm->tr.ref - 1];    // point to the loop start
+        auto& pt = vm->tt.curTrace->loop;
+        pt.startRef = vm->tt.curTrace->nodes[vm->tt.curTrace->ref - 1];    // point to the loop start
         pt.endRef = nullptr;
         pt.start = vm->programCounter;
-        
+        pt.active = true;
+        pt.guards.clear();
+        pt.locals.clear();
+
         // Take a snapshot of the local variable state.
-        for (size_t i = 0; i < vm->tr.locals.size(); i++)
+        for (size_t i = 0; i < vm->tt.curTrace->locals.size(); i++)
         {
             auto& local = pt.locals.emplace_back();
-            local.minRef = local.maxRef = vm->tr.locals[i];
+            local.minRef = local.maxRef = vm->tt.curTrace->locals[i];
         }
 
         pt.loopStart = vm->trace.size(); // point to after the loop start
+    }
+}
+
+static void ExecuteTrace(VirtualMachine* vm)
+{
+    for (int i = 0; i < vm->tt.numTraces; i++)
+    {
+        Trace* trace = &vm->tt.traces[i];
+        if (trace->pc == vm->programInstruction)
+        {
+            ActivationRecord record(int(vm->locals.size()), &vm->mm);
+            for (size_t i = 0; i < vm->locals.size(); i++)
+            {
+                record.Add(int(i), vm->mm.GetType(vm->locals[i]), vm->locals[i]);
+            }
+            unsigned char* buffer = record.GetBuffer();
+
+            vm->tt.curTrace = trace;
+
+            const int state = vm->jit.jit_execute(vm->jit_instance, trace->jit_trace, buffer);
+            break;
+        }
     }
 }
 
@@ -2226,6 +2467,7 @@ static int ResumeScript2(VirtualMachine* vm)
             vm->debugLine = vm->debugLines[vm->programCounter - vm->programOffset];
         }
 
+        vm->programInstruction = vm->programCounter;
         const unsigned char op = vm->program[vm->programCounter++];
 
         switch (op)
@@ -2320,6 +2562,12 @@ static int ResumeScript2(VirtualMachine* vm)
             LoopStart(vm);
             Op_Yield(vm);
             break;
+        case OP_TRPUSH:
+        case OP_TRPUSH_LOCAL:
+            ExecuteTrace(vm);
+            break;
+        default:
+            abort();
         }
 
         vm->instructionsExecuted++;
@@ -2378,36 +2626,44 @@ int SunScript::RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nan
     // Convert timeout to nanoseconds (or whatever it may be specified in)
     vm->timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout).count();
     
-    if (vm->jit_trace)
+    if (vm->tt.numTraces > 0 && vm->tt.traces[0].jit_trace)
     {
-        const int state = vm->jit.jit_execute(vm->jit_instance, vm->jit_trace);
-        
-        // If it returned an error, a guard failed, try the interpreter instead.
-        if (state != VM_ERROR)
+        vm->tt.curTrace = &vm->tt.traces[0];
+
+        ActivationRecord record(int(vm->locals.size()), &vm->mm);
+        for (size_t i = 0; i < vm->locals.size(); i++)
+        {
+            record.Add(int(i), vm->mm.GetType(vm->locals[i]), vm->locals[i]);
+        }
+        unsigned char* buffer = record.GetBuffer();
+
+        const int state = vm->jit.jit_execute(vm->jit_instance, vm->tt.curTrace->jit_trace, buffer);
+        if (state == VM_YIELDED)
         {
             return state;
         }
-
-        assert(state == VM_ERROR);
 
         return ResumeScript2(vm);
     }
 
     vm->programCounter = vm->main->pc + vm->programOffset;
+    vm->programInstruction = vm->programCounter;
     vm->locals.resize(vm->main->locals.size() + vm->main->parameters.size());
     vm->main->counter++;
 
-    if (vm->main->counter == 100 && vm->jit_instance)
+    if (vm->main->counter == HOT_COUNT && vm->jit_instance)
     {
         // Run with trace
-        Trace_Initialize(vm);
+        vm->hot = true;
+        Trace_Start(vm);
         const int state = ResumeScript2(vm);
         if (state == VM_OK && vm->tracing)
         {
             // End tracing and JIT compile
+            Trace_Done(vm);
             Trace_Finalize(vm);
+            Trace_Compile(vm);
             vm->tracing = false;
-            vm->jit_trace = vm->jit.jit_compile_trace(vm->jit_instance, vm, vm->tr.trace.data(), int(vm->tr.trace.size()));
         }
         return state;
     }
@@ -2417,36 +2673,48 @@ int SunScript::RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nan
 
 int SunScript::ResumeScript(VirtualMachine* vm)
 {
-    if (vm->jit_instance && vm->jit_trace)
+    if (vm->jit_instance && vm->tt.numTraces > 0 && vm->tt.traces[0].jit_trace)
     {
-        return vm->jit.jit_resume(vm->jit_instance);
+        const int state = vm->jit.jit_resume(vm->jit_instance);
+        if (state == VM_YIELDED)
+        {
+            return state;
+        }
+
+        return ResumeScript2(vm);
     }
 
-    int state = ResumeScript2(vm);
+    const int state = ResumeScript2(vm);
     if (state == VM_OK && vm->tracing)
     {
         // End tracing and JIT compile
+        Trace_Done(vm);
         Trace_Finalize(vm);
+        Trace_Compile(vm);
         vm->tracing = false;
-        vm->jit_trace = vm->jit.jit_compile_trace(vm->jit_instance, vm, vm->tr.trace.data(), int(vm->tr.trace.size()));
     }
     return state;
 }
 
+MemoryManager* SunScript::GetMemoryManager(VirtualMachine* vm)
+{
+    return &vm->mm;
+}
+
 int SunScript::RestoreSnapshot(VirtualMachine* vm, const Snapshot& snap, int number, int ref)
 {
-    if (number < 0 || number >= vm->tr.snaps.size())
+    if (number < 0 || number >= vm->tt.curTrace->snaps.size())
     {
         return VM_ERROR;
     }
 
-    if (ref < 0 || ref >= vm->tr.nodes.size())
+    if (ref < 0 || ref >= vm->tt.curTrace->nodes.size())
     {
         return VM_ERROR;
     }
 
-    const auto& sn = vm->tr.snaps[number];
-    vm->programCounter = vm->tr.nodes[ref]->pc;
+    const auto& sn = vm->tt.curTrace->snaps[number];
+    vm->programCounter = sn.pc;
     size_t numLocals = vm->main->locals.size();
     for (auto& fr : sn.frames)
     {
@@ -2462,7 +2730,7 @@ int SunScript::RestoreSnapshot(VirtualMachine* vm, const Snapshot& snap, int num
         
         snap.Get(i, &ref, &val);
 
-        const int type = vm->tr.nodes[ref]->type;
+        const int type = vm->tt.curTrace->nodes[ref]->type;
 
         bool ok = false;
         for (auto& local : sn.locals)

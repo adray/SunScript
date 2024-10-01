@@ -6,6 +6,7 @@
 namespace SunScript
 {
     constexpr unsigned char MK_LOOPSTART = 1 << 7;
+    constexpr unsigned char MK_TRACESTART = 1 << 6;
 
     constexpr unsigned char OP_PUSH = 0x0;
     constexpr unsigned char OP_POP = 0x1;
@@ -42,6 +43,8 @@ namespace SunScript
     constexpr unsigned char OP_LSMUL = OP_MUL | MK_LOOPSTART;
     constexpr unsigned char OP_LSDIV = OP_DIV | MK_LOOPSTART;
 
+    constexpr unsigned char OP_TRPUSH = OP_PUSH | MK_TRACESTART;
+    constexpr unsigned char OP_TRPUSH_LOCAL = OP_PUSH_LOCAL | MK_TRACESTART;
 
     constexpr unsigned char TY_VOID = 0x0;
     constexpr unsigned char TY_INT = 0x1;
@@ -59,6 +62,8 @@ namespace SunScript
 
     constexpr unsigned char IR_LOAD_INT = 0x0;
     constexpr unsigned char IR_LOAD_STRING = 0x1;
+    constexpr unsigned char IR_LOAD_INT_LOCAL = 0x10;
+    constexpr unsigned char IR_LOAD_STRING_LOCAL = 0x11;
     constexpr unsigned char IR_CALL = 0x20;
     constexpr unsigned char IR_YIELD = 0x21;
     constexpr unsigned char IR_INCREMENT_INT = 0x40;
@@ -84,24 +89,7 @@ namespace SunScript
     struct VirtualMachine;
     struct Program;
     struct ProgramBlock;
-
-    class Snapshot
-    {
-    private:
-        struct Value
-        {
-            int _ref;
-            int64_t _value;
-        };
-
-    public:
-        void Add(int ref, int64_t value);
-        void Get(int idx, int* ref, int64_t* value) const;
-        inline size_t Count() const { return _values.size(); }
-
-    private:
-        std::vector<Value> _values;
-    };
+    struct FunctionInfo;
 
     class MemoryManager
     {
@@ -136,6 +124,38 @@ namespace SunScript
         std::vector<Segment> _segments;
     };
 
+    class Snapshot
+    {
+    private:
+        struct Value
+        {
+            int _ref;
+            int64_t _value;
+        };
+
+    public:
+        Snapshot(int numValues, MemoryManager* mm);
+        void Add(int ref, int64_t value);
+        void Get(int idx, int* ref, int64_t* value) const;
+        inline size_t Count() const { return _numValues; }
+
+    private:
+        Value* _values;
+        int _numValues;
+        int _index;
+    };
+
+    class ActivationRecord
+    {
+    public:
+        ActivationRecord(int numItems, MemoryManager* mm);
+        void Add(int id, int type, void* data);
+        inline unsigned char* GetBuffer() { return _buffer; }
+
+    private:
+        unsigned char* _buffer;
+    };
+
     struct Label
     {
         int pos;
@@ -151,14 +171,12 @@ namespace SunScript
 
         Callstack* next = nullptr;
     };
-    
-    struct FunctionInfo;
 
     struct Jit
     {
         void* (*jit_initialize) (void);
-        void* (*jit_compile_trace) (void* instance, VirtualMachine* vm, unsigned char* trace, int size);
-        int (*jit_execute) (void* instance, void* data);
+        void* (*jit_compile_trace) (void* instance, VirtualMachine* vm, unsigned char* trace, int size, int traceId);
+        int (*jit_execute) (void* instance, void* data, unsigned char* record);
         int (*jit_resume) (void* instance);
         void (*jit_shutdown) (void* instance);
     };
@@ -172,8 +190,10 @@ namespace SunScript
     constexpr int ERR_NONE = 0;
     constexpr int ERR_INTERNAL = 1;
 
+    /* Gets the call stack. */
     Callstack* GetCallStack(VirtualMachine* vm);
     
+    /* Destroys the call stack. */
     void DestroyCallstack(Callstack* callstack);
 
     /*
@@ -234,6 +254,8 @@ namespace SunScript
     int RunScript(VirtualMachine* vm, std::chrono::duration<int, std::nano> timeout);
 
     int ResumeScript(VirtualMachine* vm);
+
+    MemoryManager* GetMemoryManager(VirtualMachine* vm);
 
     int RestoreSnapshot(VirtualMachine* vm, const Snapshot& snap, int number, int ref);
 

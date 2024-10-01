@@ -470,7 +470,6 @@ static void vm_emit_ui(const vm_instruction& ins, unsigned char* program, int& c
 //================
 #define VM_ALIGN_16(x) ((x + 0xf) & ~(0xf))
 
-
 //static void vm_cpuid(const vm_instruction_table& table, unsigned char* program, int& count)
 //{
 //    vm_emit(table.cpuid, program, count);
@@ -1219,7 +1218,7 @@ class JIT_Analyzer
 public:
     void Load(unsigned char* ir, unsigned int count);
     JIT_Allocation GetAllocation(int index);
-    bool IsRegisterUsed(int reg);
+    /*bool IsRegisterUsed(int reg);*/
     int StackSize();
     void GetLiveValues(int index, std::vector<JIT_LiveValue>& live);
     void Dump();
@@ -1309,15 +1308,15 @@ int JIT_Analyzer::StackSize()
     return int(allocations.size()) - VM_REGISTER_MAX;
 }
 
-bool JIT_Analyzer::IsRegisterUsed(int reg)
+/*bool JIT_Analyzer::IsRegisterUsed(int reg)
 {
-    if (reg >= 0 && reg < registers.size())
+    if (reg >= 0 && reg < VM_REGISTER_MAX)
     {
         return allocations[reg].Head() != nullptr;
     }
 
     return false;
-}
+}*/
 
 JIT_Allocation JIT_Analyzer::GetAllocation(int index)
 {
@@ -1451,6 +1450,11 @@ void JIT_Analyzer::InitializeAllocations()
     allocations[VM_ARG2].SetEnabled(false);
     allocations[VM_ARG3].SetEnabled(false);
     allocations[VM_ARG4].SetEnabled(false);
+
+#if VM_MAX_ARGS == 6
+    allocations[VM_ARG5].SetEnabled(false);
+    allocations[VM_ARG6].SetEnabled(false);
+#endif
 }
 
 void JIT_Analyzer::AllocateRegister(int ref, int start, int end)
@@ -1634,6 +1638,10 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             p1 = vm_jit_read_int(ir, &pc);
             pc++; // type
             break;
+        case IR_LOAD_STRING_LOCAL:
+        case IR_LOAD_INT_LOCAL:
+            pc++;
+            break;
         }
 
         if (p1 > -1 && p1 < ref) { liveness[p1] = std::max(liveness[p1], ref - p1); }
@@ -1800,6 +1808,7 @@ struct JIT_Trace
     void* _jit_data;
     int _size;
     int _jumpPos;
+    unsigned char* _record;
 
     int _id;
     MemoryManager _mm;
@@ -1812,7 +1821,7 @@ struct JIT_Trace
 
     uint64_t _startTime;     // compilation start time
     uint64_t _endTime;       // compilation end time
-    uint64_t _runCount;      // number of times the method has been invoked
+    uint64_t _runCount;      // number of times the trace has been invoked
 };
 
 class JIT_Coroutine
@@ -1993,32 +2002,15 @@ extern "C"
         void* val = nullptr;
         GetParam(vm, &val);
         return val;
-
-        //int retInt;
-        //std::string val;
-        //if (GetParamInt(vm, &retInt) == VM_OK)
-        //{
-        //    int* data = (int*)mm->New(sizeof(retInt), TY_INT);
-        //    *data = retInt;
-        //    return data;
-        //}
-        //else if (GetParamString(vm, &val) == VM_OK)
-        //{
-        //    char* copy = (char*)mm->New(val.size() + 1, TY_STRING);
-        //    std::memcpy(copy, val.c_str(), val.size());
-        //    copy[val.size()] = 0;
-        //    return copy;
-        //}
-
-        //return nullptr;
     }
 
     static int vm_restore_snapshot(VirtualMachine* vm, int64_t* data, const int size, const int snap)
     {
-        int64_t* pos = data + size / sizeof(int64_t) - 1;
         JIT_Snap* s = reinterpret_cast<JIT_Snap*>(data);
 
-        Snapshot sn;
+        MemoryManager* mm = GetMemoryManager(vm);
+
+        Snapshot sn(int(s->size), mm);
         for (int64_t i = 0; i < s->size; i++)
         {
             sn.Add(int(s->slots[i].ref), s->slots[i].data);
@@ -2664,7 +2656,10 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
         vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, VM_REGISTER_EAX);
         break;
     case ST_REG:
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
+        if (al.reg != VM_REGISTER_EAX)
+        {
+            vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
+        }
         break;
     }
 }
@@ -2748,32 +2743,6 @@ static void vm_jit_unbox(VirtualMachine* vm, Jitter* jitter)
 inline static void vm_jit_epilog(Jitter* jitter, const int stacksize)
 {
     vm_add_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize);
-
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_EBX)) {
-        vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EBX);
-    }
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_ESI)) {
-        vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_ESI);
-    }
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_EDI)) {
-        vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_EDI);
-    }
-
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_R15)) {
-        vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_R15);
-    }
-
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_R14)) {
-        vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_R14);
-    }
-
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_R13)) {
-        vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_R13);
-    }
-
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_R12)) {
-        vm_pop_reg(jitter->jit, jitter->count, VM_REGISTER_R12);
-    }
 }
 
 static void vm_jit_phi(VirtualMachine* vm, Jitter* jitter)
@@ -2868,6 +2837,37 @@ static void vm_jit_store_snapshot(VirtualMachine* vm, Jitter* jitter, const int 
 
 static void vm_jit_exit_trace(VirtualMachine* vm, Jitter* jitter, const int stacksize)
 {
+    // Standard exit
+
+    vm_jit_store_snapshot(vm, jitter, jitter->snapRef, jitter->snapshot);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)vm);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, VM_REGISTER_ESP);
+
+    // TODO: For the ABI we really should move these into the space before the register homes.
+    // Until then we duplicate the register homes down here.
+    // 
+    // Pushing them to the stack and then calling a method may break things
+    // as they may get overwritten as they are the 'register homes'
+    const int register_homes = 8 * 4; // 4 register homes 8 bytes each
+    vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, register_homes);
+
+    // Generate a call to vm_restore_snapshot
+    // ARG1 = vm
+    // ARG2 = ESP
+    // ARG3 = size
+    // ARG4 = snap no
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, (long long)vm_restore_snapshot);
+    vm_call_absolute(jitter->jit, jitter->count, VM_REGISTER_EAX);
+
+    // The return value is the size
+    vm_add_reg_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, VM_REGISTER_EAX);
+    vm_add_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, register_homes);
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, VM_OK);
+    vm_jit_epilog(jitter, stacksize);
+    vm_return(jitter->jit, jitter->count);
+
     // Patch guard failures
     if (jitter->_trace->_forwardJumps.size() > 0)
     {
@@ -2935,40 +2935,45 @@ static void vm_jit_exit_trace(VirtualMachine* vm, Jitter* jitter, const int stac
     }
 }
 
+static void vm_jit_load_string_local(VirtualMachine* vm, Jitter* jitter)
+{
+    const int id = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
+
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_record);
+    vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_ARG1, 0);
+
+    const int dst = vm_jit_decode_dst(allocation);
+    vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_ARG1, id * 16 + 8);
+}
+
+static void vm_jit_load_int_local(VirtualMachine* vm, Jitter* jitter)
+{
+    const int id = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
+
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_record);
+    vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_ARG1, 0);
+
+    const int dst = vm_jit_decode_dst(allocation);
+    vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_ARG1, id * 16 + 8);
+}
+
 static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
 {
     // Store non-volatile registers
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_R12)) {
-        vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_R12);
-    }
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_R13)) {
-        vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_R13);
-    }
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_R14)) {
-        vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_R14);
-    }
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_R15)) {
-        vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_R15);
-    }
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_EDI)) {
-        vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EDI);
-    }
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_ESI)) {
-        vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_ESI);
-    }
-    if (jitter->analyzer.IsRegisterUsed(VM_REGISTER_EBX)) {
-        vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EBX);
-    }
 
-    const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */ + 8 * jitter->analyzer.StackSize()/*space for locals*/ );
+    const int stackNeeded = (32 /* 4 register homes for callees */ + 8 * jitter->analyzer.StackSize()/*space for locals*/);
+    const int totalSize = VM_ALIGN_16(stackNeeded + 8);
+    const int stacksize = totalSize - 8;
+
+    assert((stacksize + 8/*pc push by call*/) % 16 == 0); // Check the stack is 16-byte aligned
 
     vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize); // grow stack
-
-    // TODO: store local variables
-    //for (int i = 0; i < int(jitter->locals.size()); i++)
-    //{
-    //    jitter->locals[i].pos = jitter->stack.Local();
-    //}
 
     while (jitter->running && *jitter->pc < size_t(jitter->size))
     {
@@ -3046,6 +3051,12 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_UNBOX:
             vm_jit_unbox(vm, jitter);
             break;
+        case IR_LOAD_INT_LOCAL:
+            vm_jit_load_int_local(vm, jitter);
+            break;
+        case IR_LOAD_STRING_LOCAL:
+            vm_jit_load_string_local(vm, jitter);
+            break;
         default:
             abort();
         }
@@ -3053,11 +3064,29 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         jitter->refIndex++;
     }
 
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, VM_OK);
-    vm_jit_epilog(jitter, stacksize);
-    vm_return(jitter->jit, jitter->count);
-
     vm_jit_exit_trace(vm, jitter, stacksize);
+}
+
+static void vm_jit_push_registers(unsigned char* jit, int& count)
+{
+    vm_push_reg(jit, count, VM_REGISTER_R12);
+    vm_push_reg(jit, count, VM_REGISTER_R13);
+    vm_push_reg(jit, count, VM_REGISTER_R14);
+    vm_push_reg(jit, count, VM_REGISTER_R15);
+    vm_push_reg(jit, count, VM_REGISTER_EDI);
+    vm_push_reg(jit, count, VM_REGISTER_ESI);
+    vm_push_reg(jit, count, VM_REGISTER_EBX);
+}
+
+static void vm_jit_pop_registers(unsigned char* jit, int& count)
+{
+    vm_pop_reg(jit, count, VM_REGISTER_EBX);
+    vm_pop_reg(jit, count, VM_REGISTER_ESI);
+    vm_pop_reg(jit, count, VM_REGISTER_EDI);
+    vm_pop_reg(jit, count, VM_REGISTER_R15);
+    vm_pop_reg(jit, count, VM_REGISTER_R14);
+    vm_pop_reg(jit, count, VM_REGISTER_R13);
+    vm_pop_reg(jit, count, VM_REGISTER_R12);
 }
 
 static void vm_jit_suspend(JIT_Manager* manager)
@@ -3067,10 +3096,7 @@ static void vm_jit_suspend(JIT_Manager* manager)
     
     // Store volatile registers
 
-    vm_push_reg(jit, count, VM_REGISTER_EDI);
-    vm_push_reg(jit, count, VM_REGISTER_ESI);
-    vm_push_reg(jit, count, VM_REGISTER_EBX);
-
+    vm_jit_push_registers(jit, count);
 
     const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */);
 
@@ -3135,9 +3161,7 @@ static void vm_jit_suspend(JIT_Manager* manager)
     // Epilogue
 
     vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize);
-    vm_pop_reg(jit, count, VM_REGISTER_EBX);
-    vm_pop_reg(jit, count, VM_REGISTER_ESI);
-    vm_pop_reg(jit, count, VM_REGISTER_EDI);
+    vm_jit_pop_registers(jit, count);
     vm_return(jit, count);
 
     // Finalize
@@ -3155,9 +3179,7 @@ static void vm_jit_yielded(JIT_Manager* manager)
 
     // Store volatile registers
 
-    vm_push_reg(jit, count, VM_REGISTER_EDI);
-    vm_push_reg(jit, count, VM_REGISTER_ESI);
-    vm_push_reg(jit, count, VM_REGISTER_EBX);
+    vm_jit_push_registers(jit, count);
 
     const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */);
 
@@ -3174,9 +3196,7 @@ static void vm_jit_yielded(JIT_Manager* manager)
     // Epilogue
 
     vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize);
-    vm_pop_reg(jit, count, VM_REGISTER_EBX);
-    vm_pop_reg(jit, count, VM_REGISTER_ESI);
-    vm_pop_reg(jit, count, VM_REGISTER_EDI);
+    vm_jit_pop_registers(jit, count);
     vm_return(jit, count);
 
     // Finalize
@@ -3194,9 +3214,7 @@ static void vm_jit_entry_stub(JIT_Manager* manager)
 
     // Store volatile registers
 
-    vm_push_reg(jit, count, VM_REGISTER_EDI);
-    vm_push_reg(jit, count, VM_REGISTER_ESI);
-    vm_push_reg(jit, count, VM_REGISTER_EBX);
+    vm_jit_push_registers(jit, count);
 
     const int stacksize = VM_ALIGN_16(32 /* 4 register homes for callees */);
 
@@ -3216,9 +3234,7 @@ static void vm_jit_entry_stub(JIT_Manager* manager)
     // Epilogue
 
     vm_add_imm_to_reg_x64(jit, count, VM_REGISTER_ESP, stacksize);
-    vm_pop_reg(jit, count, VM_REGISTER_EBX);
-    vm_pop_reg(jit, count, VM_REGISTER_ESI);
-    vm_pop_reg(jit, count, VM_REGISTER_EDI);
+    vm_jit_pop_registers(jit, count);
     vm_return(jit, count);
 
     // Finalize
@@ -3247,13 +3263,14 @@ void* SunScript::JIT_Initialize()
     return manager;
 }
 
-int SunScript::JIT_ExecuteTrace(void* instance, void* data)
+int SunScript::JIT_ExecuteTrace(void* instance, void* data, unsigned char* record)
 {
     JIT_Manager* mm = reinterpret_cast<JIT_Manager*>(instance);
     JIT_Trace* trace = reinterpret_cast<JIT_Trace*>(data);
     trace->_mm.Reset();
+    trace->_record = record;
+    trace->_runCount++;
 
-    //vm_execute(method->_jit_data);
     int(*fn)(void*) = (int(*)(void*))((unsigned char*)mm->_co._vm_stub);
     return fn(trace->_jit_data);
 }
@@ -3435,28 +3452,36 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             op1 = trace[pc++];
             std::cout << " IR_UNBOX " << op1 << " " << op2 << std::endl;
             break;
+        case IR_LOAD_INT_LOCAL:
+            op1 = trace[pc++];
+            std::cout << " IR_LOAD_INT_LOCAL " << op1 << std::endl;
+            break;
+        case IR_LOAD_STRING_LOCAL:
+            op1 = trace[pc++];
+            std::cout << " IR_LOAD_STRING_LOCAL " << op1 << std::endl;
+            break;
         default:
-            std::cout << " UNKOWN" << std::endl;
+            std::cout << " UNKNOWN" << std::endl;
         }
 
         ref++;
     }
 }
 
-void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size)
+void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* traces, int sizes, int traceId)
 {
     unsigned char* jit = new unsigned char [1024 * 3];
     unsigned int pc = 0;
 
     std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
-    jitter->program = trace;
+    jitter->program = traces;
     jitter->pc = &pc;
-    jitter->size = size;
+    jitter->size = sizes;
     jitter->jit = jit;
     jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
 
     jitter->_trace = new JIT_Trace();
-    jitter->_trace->_id = 0; 
+    jitter->_trace->_id = traceId; 
     jitter->_trace->_runCount = 0;
     jitter->_trace->_jumpPos = 0;
 
@@ -3467,7 +3492,7 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     //==============================
     jitter->_trace->_startTime = clock.now().time_since_epoch().count();
 
-    jitter->analyzer.Load(trace, size);
+    jitter->analyzer.Load(traces, sizes);
 
     vm_jit_generate_trace(vm, jitter.get());
 
@@ -3485,6 +3510,8 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     //===============================
     jitter->_trace->_endTime = clock.now().time_since_epoch().count();
     delete[] jit;
+
+    //std::cout << "CompileTrace " << (jitter->_trace->_endTime - jitter->_trace->_startTime) << std::endl;
 
     //jitter->analyzer.Dump();
 

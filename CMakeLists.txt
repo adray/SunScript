@@ -15,12 +15,24 @@ set (SUN_SOURCES
     "Tests/SunTest.cpp"
 )
 
+set (SUN_TESTS
+    "Tests/Arithmetic.txt"
+    "Tests/BranchTest.txt"
+    "Tests/Coroutine.txt"
+    "Tests/Factorial.txt"
+    "Tests/ForLoop.txt"
+    "Tests/Guard.txt"
+    "Tests/LoopTest.txt"
+    "Tests/NestedLoop.txt"
+    "Tests/Spill.txt"
+)
+
 project ("Sun")
 
 add_compile_definitions(_SUN_EXECUTABLE_)
 
 # Add source to this project's executable.
-add_executable(Sun ${SUN_SOURCES})
+add_executable(Sun ${SUN_SOURCES} ${SUN_TESTS})
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET Sun PROPERTY CXX_STANDARD 20)
