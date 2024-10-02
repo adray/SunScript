@@ -86,6 +86,14 @@ namespace SunScript
     constexpr unsigned char IR_SNAP = 0x64;
     constexpr unsigned char IR_UNBOX = 0x65;
 
+#ifdef USE_SUN_FLOAT
+    typedef float real;
+    constexpr int SUN_REAL_SIZE = 4;
+#else
+    typedef double real;
+    constexpr int SUN_REAL_SIZE = 8;
+#endif
+
     struct VirtualMachine;
     struct Program;
     struct ProgramBlock;
@@ -269,6 +277,8 @@ namespace SunScript
 
     int GetParam(VirtualMachine* vm, void** param);
 
+    int GetParamReal(VirtualMachine* vm, real* param);
+
     int GetParamInt(VirtualMachine* vm, int* param);
 
     int GetParamString(VirtualMachine* vm, std::string* param);
@@ -324,6 +334,8 @@ namespace SunScript
     void EmitPushLocal(ProgramBlock* program, unsigned char local);
     
     void EmitPush(ProgramBlock* program, int value);
+
+    void EmitPush(ProgramBlock* program, real value);
 
     void EmitPush(ProgramBlock* program, const std::string& value);
 

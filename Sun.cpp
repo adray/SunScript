@@ -58,7 +58,8 @@ enum class TokenType
     // Literals
 
     STRING,
-    NUMBER
+    NUMBER,
+    INTEGER
 };
 
 class Token
@@ -74,7 +75,8 @@ public:
     inline TokenType Type() const { return _type; }
     inline int Line() const { return _line; }
     inline std::string String() const { return _value; }
-    inline double Number() const { return std::strtod(_value.c_str(), 0); }
+    inline real Number() const { return std::strtod(_value.c_str(), 0); }
+    inline int Integer() const { return std::strtol(_value.c_str(), 0, 10); }
 
 private:
     TokenType _type;
@@ -296,7 +298,7 @@ void Scanner::ScanNumberLiteral()
         }
         else
         {
-            AddToken(TokenType::NUMBER, str);
+            AddToken(hasDot ? TokenType::NUMBER : TokenType::INTEGER, str);
             scanning = false;
         }
     }
@@ -989,7 +991,10 @@ void Parser::EmitExpr(Expr* expr)
         EmitPush(block, tok.String());
         break;
     case TokenType::NUMBER:
-        EmitPush(block, (int)tok.Number());
+        EmitPush(block, tok.Number());
+        break;
+    case TokenType::INTEGER:
+        EmitPush(block, tok.Integer());
         break;
     case TokenType::IDENTIFIER:
         if (expr->GetCall())
@@ -1320,6 +1325,12 @@ Expr* Parser::ParsePrimary()
         return new Expr(nullptr, nullptr, str);
     }
     else if (Match(TokenType::NUMBER))
+    {
+        Token number = Peek();
+        Advance();
+        return new Expr(nullptr, nullptr, number);
+    }
+    else if (Match(TokenType::INTEGER))
     {
         Token number = Peek();
         Advance();

@@ -640,7 +640,9 @@ inline static void Trace_Start(VirtualMachine* vm)
                 vm->trace.push_back(static_cast<unsigned char>(i));
                 break;
             default:
-                abort();
+                // Unable to start the trace.
+                vm->tracing = false;
+                break;
             }
             vm->tt.curTrace->locals[i] = node;
             vm->tt.curTrace->ref++;
@@ -1300,6 +1302,13 @@ static int Read_Int(unsigned char* program, unsigned int* pc)
     return a | (b << 8) | (c << 16) | (d << 24);
 }
 
+static real Read_Real(unsigned char* program, unsigned int* pc)
+{
+    real* value = reinterpret_cast<real*>(&program[*pc]);
+    *pc += SUN_REAL_SIZE;
+    return *value;
+}
+
 //static std::string Read_String(unsigned char* program, unsigned int* pc)
 //{
 //    std::string str;
@@ -1321,6 +1330,15 @@ static char* Read_String(unsigned char* program, unsigned int* pc)
     const size_t len = strlen(str) + 1;
     *pc += static_cast<unsigned int>(len);
     return str;
+}
+
+static void Push_Real(VirtualMachine* vm, real val)
+{
+    assert(vm->statusCode == VM_OK);
+
+    real* data = reinterpret_cast<real*>(vm->mm.New(sizeof(real), TY_REAL));
+    *data = val;
+    vm->stack.push(data);
 }
 
 static void Push_Int(VirtualMachine* vm, int val)
@@ -1428,6 +1446,13 @@ static void Op_Push(VirtualMachine* vm)
          const char* str = Read_String(vm->program, &vm->programCounter);
          Push_String(vm, str);
          if (vm->tracing) { Trace_LoadC_String(vm, str); }
+    }
+        break;
+    case TY_REAL:
+    {
+        const real val = Read_Real(vm->program, &vm->programCounter);
+        Push_Real(vm, val);
+        if (vm->tracing) { Trace_Abort(vm); }
     }
         break;
     }
@@ -1642,6 +1667,10 @@ static void Add_String(VirtualMachine* vm, char* v1, void* v2)
         result << *reinterpret_cast<int*>(v2);
         if (vm->tracing) { Trace_App_String_Int(vm); }
         break;
+    case TY_REAL:
+        result << *reinterpret_cast<real*>(v2);
+        if (vm->tracing) { Trace_Abort(vm); }
+        break;
     default:
         vm->running = false;
         vm->statusCode = VM_ERROR;
@@ -1651,6 +1680,39 @@ static void Add_String(VirtualMachine* vm, char* v1, void* v2)
     if (vm->statusCode == VM_OK)
     {
         Push_String(vm, result.str().c_str());
+    }
+}
+
+static void Add_Real(VirtualMachine* vm, real* v1, void* v2)
+{
+    real result = *v1;
+    const char type = vm->mm.GetType(v2);
+
+    switch (type)
+    {
+    case TY_REAL:
+        result += *reinterpret_cast<real*>(v2);
+        if (vm->tracing) { Trace_Abort(vm); }
+        Push_Real(vm, result);
+        break;
+    case TY_INT:
+        result += real(*reinterpret_cast<int*>(v2));
+        if (vm->tracing) { Trace_Abort(vm); }
+        Push_Real(vm, result);
+        break;
+    case TY_STRING:
+    {
+        std::stringstream ss;
+        ss << result;
+        ss << *reinterpret_cast<char*>(v2);
+        if (vm->tracing) { Trace_Abort(vm); }
+        Push_String(vm, ss.str().c_str());
+    }
+        break;
+    default:
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        break;
     }
 }
 
@@ -1675,10 +1737,46 @@ static void Add_Int(VirtualMachine* vm, int* v1, void* v2)
         Push_String(vm, ss.str().c_str());
     }
         break;
+    case TY_REAL:
+    {
+        real res = real(result) + *reinterpret_cast<real*>(v2);
+        if (vm->tracing) { Trace_Abort(vm); }
+        Push_Real(vm, res);
+    }
+        break;
     default:
         vm->running = false;
         vm->statusCode = VM_ERROR;
         break;
+    }
+}
+
+static void Sub_Real(VirtualMachine* vm, real* v1, void* v2)
+{
+    real result = *v1;
+    const char type = vm->mm.GetType(v2);
+
+    if (type == TY_REAL)
+    {
+        result = *reinterpret_cast<real*>(v2) - result;
+
+        if (vm->tracing) { Trace_Abort(vm); }
+    }
+    else if (type == TY_INT)
+    {
+        result = *reinterpret_cast<int*>(v2) - result;
+
+        if (vm->tracing) { Trace_Abort(vm); }
+    }
+    else
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+    }
+
+    if (vm->statusCode == VM_OK)
+    {
+        Push_Real(vm, result);
     }
 }
 
@@ -1689,9 +1787,39 @@ static void Sub_Int(VirtualMachine* vm, int* v1, void* v2)
 
     if (type == TY_INT)
     {
-        result = *reinterpret_cast<int*>(v2) - result;
+        Push_Int(vm, result = *reinterpret_cast<int*>(v2) - result);
 
         if (vm->tracing) { Trace_Sub_Int(vm); }
+    }
+    else if (type == TY_REAL)
+    {
+        Push_Real(vm, *reinterpret_cast<real*>(v2) - result);
+
+        if (vm->tracing) { Trace_Abort(vm); }
+    }
+    else
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+    }
+}
+
+static void Mul_Real(VirtualMachine* vm, real* v1, void* v2)
+{
+    real result = *v1;
+    const char type = vm->mm.GetType(v2);
+
+    if (type == TY_REAL)
+    {
+        result *= *reinterpret_cast<real*>(v2);
+
+        if (vm->tracing) { Trace_Abort(vm); }
+    }
+    else if (type == TY_INT)
+    {
+        result *= *reinterpret_cast<int*>(v2);
+
+        if (vm->tracing) { Trace_Abort(vm); }
     }
     else
     {
@@ -1701,7 +1829,7 @@ static void Sub_Int(VirtualMachine* vm, int* v1, void* v2)
 
     if (vm->statusCode == VM_OK)
     {
-        Push_Int(vm, result);
+        Push_Real(vm, result);
     }
 }
 
@@ -1712,9 +1840,39 @@ static void Mul_Int(VirtualMachine* vm, int* v1, void* v2)
 
     if (type == TY_INT)
     {
-        result *= *reinterpret_cast<int*>(v2);
+        Push_Int(vm, result * *reinterpret_cast<int*>(v2));
 
         if (vm->tracing) { Trace_Mul_Int(vm); }
+    }
+    else if (type == TY_REAL)
+    {
+        Push_Real(vm, result * *reinterpret_cast<real*>(v2));
+
+        if (vm->tracing) { Trace_Abort(vm); }
+    }
+    else
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+    }
+}
+
+static void Div_Real(VirtualMachine* vm, real* v1, void* v2)
+{
+    real result = *v1;
+    const char type = vm->mm.GetType(v2);
+
+    if (type == TY_REAL)
+    {
+        result = *reinterpret_cast<real*>(v2) / result;
+
+        if (vm->tracing) { Trace_Abort(vm); }
+    }
+    else if (type == TY_INT)
+    {
+        result = *reinterpret_cast<int*>(v2) / result;
+
+        if (vm->tracing) { Trace_Abort(vm); }
     }
     else
     {
@@ -1724,7 +1882,7 @@ static void Mul_Int(VirtualMachine* vm, int* v1, void* v2)
 
     if (vm->statusCode == VM_OK)
     {
-        Push_Int(vm, result);
+        Push_Real(vm, result);
     }
 }
 
@@ -1735,19 +1893,20 @@ static void Div_Int(VirtualMachine* vm, int* v1, void* v2)
 
     if (type == TY_INT)
     {
-        result = *reinterpret_cast<int*>(v2) / result;
+        Push_Int(vm, *reinterpret_cast<int*>(v2) / result);
 
         if (vm->tracing) { Trace_Div_Int(vm); }
+    }
+    else if (type == TY_REAL)
+    {
+        Push_Real(vm, *reinterpret_cast<real*>(v2) / result);
+
+        if (vm->tracing) { Trace_Abort(vm); }
     }
     else
     {
         vm->running = false;
         vm->statusCode = VM_ERROR;
-    }
-
-    if (vm->statusCode == VM_OK)
-    {
-        Push_Int(vm, result);
     }
 }
 
@@ -1762,14 +1921,20 @@ static void Op_Unary_Minus(VirtualMachine* vm)
         return;
     }
 
-    if (vm->tracing) { Trace_Unary_Minus_Int(vm); }
-
     void* var1 = vm->stack.top();
     vm->stack.pop();
 
     if (vm->mm.GetType(var1) == TY_INT)
     {
         Push_Int(vm, -*reinterpret_cast<int*>(var1));
+        
+        if (vm->tracing) { Trace_Unary_Minus_Int(vm); }
+    }
+    else if (vm->mm.GetType(var1) == TY_REAL)
+    {
+        Push_Real(vm, -*reinterpret_cast<real*>(var1));
+
+        if (vm->tracing) { Trace_Abort(vm); }
     }
     else
     {
@@ -1804,6 +1969,9 @@ static void Op_Operator(unsigned char op, VirtualMachine* vm)
         case TY_INT:
             Add_Int(vm, reinterpret_cast<int*>(var1), var2);
             break;
+        case TY_REAL:
+            Add_Real(vm, reinterpret_cast<real*>(var1), var2);
+            break;
         default:
             vm->running = false;
             vm->statusCode = VM_ERROR;
@@ -1816,6 +1984,9 @@ static void Op_Operator(unsigned char op, VirtualMachine* vm)
         {
         case TY_INT:
             Sub_Int(vm, reinterpret_cast<int*>(var1), var2);
+            break;
+        case TY_REAL:
+            Sub_Real(vm, reinterpret_cast<real*>(var1), var2);
             break;
         default:
             vm->running = false;
@@ -1830,6 +2001,9 @@ static void Op_Operator(unsigned char op, VirtualMachine* vm)
         case TY_INT:
             Mul_Int(vm, reinterpret_cast<int*>(var1), var2);
             break;
+        case TY_REAL:
+            Mul_Real(vm, reinterpret_cast<real*>(var1), var2);
+            break;
         default:
             vm->running = false;
             vm->statusCode = VM_ERROR;
@@ -1842,6 +2016,9 @@ static void Op_Operator(unsigned char op, VirtualMachine* vm)
         {
         case TY_INT:
             Div_Int(vm, reinterpret_cast<int*>(var1), var2);
+            break;
+        case TY_REAL:
+            Div_Real(vm, reinterpret_cast<real*>(var1), var2);
             break;
         default:
             vm->running = false;
@@ -1910,13 +2087,19 @@ static void Op_Increment(VirtualMachine* vm)
         return;
     }
 
-    if (vm->tracing) { Trace_Increment_Int(vm); }
-
     void* value = vm->stack.top();
         
     if (vm->mm.GetType(value) == TY_INT)
     {
         (*reinterpret_cast<int*>(value))++;
+    
+        if (vm->tracing) { Trace_Increment_Int(vm); }
+    }
+    else if (vm->mm.GetType(value) == TY_REAL)
+    {
+        (*reinterpret_cast<real*>(value))++;
+
+        if (vm->tracing) { Trace_Abort(vm); }
     }
     else
     {
@@ -1936,13 +2119,20 @@ static void Op_Decrement(VirtualMachine* vm)
         return;
     }
 
-    if (vm->tracing) { Trace_Decrement_Int(vm); }
     
     void* value = vm->stack.top();
 
     if (vm->mm.GetType(value) == TY_INT)
     {
         (*reinterpret_cast<int*>(value))--;
+    
+        if (vm->tracing) { Trace_Decrement_Int(vm); }
+    }
+    else if (vm->mm.GetType(value) == TY_REAL)
+    {
+        (*reinterpret_cast<real*>(value))--;
+
+        if (vm->tracing) { Trace_Abort(vm); }
     }
     else
     {
@@ -2264,6 +2454,28 @@ static void Op_Compare(VirtualMachine* vm)
     {
         vm->comparer = strcmp(reinterpret_cast<char*>(item2), reinterpret_cast<char*>(item1));
         if (vm->tracing) { Trace_Cmp_String(vm); }
+    }
+    else if (vm->mm.GetType(item1) == TY_REAL && vm->mm.GetType(item2) == TY_REAL)
+    {
+        real cmp = *reinterpret_cast<real*>(item2) - *reinterpret_cast<real*>(item1);
+        if (cmp == 0.0 || isnan(cmp))
+        {
+            vm->comparer = 0;
+        }
+        else if (cmp < 0)
+        {
+            vm->comparer = -1;
+        }
+        else if (cmp > 0)
+        {
+            vm->comparer = 1;
+        }
+        else
+        {
+            abort();
+        }
+
+        if (vm->tracing) { Trace_Abort(vm); }
     }
     else
     {
@@ -2816,6 +3028,30 @@ int SunScript::GetParam(VirtualMachine* vm, void** param)
     return VM_OK;
 }
 
+int SunScript::GetParamReal(VirtualMachine* vm, real* param)
+{
+    if (vm->stack.size() == 0) { return VM_ERROR; }
+
+    void* val = vm->stack.top();
+    if (vm->mm.GetType(val) == TY_REAL)
+    {
+        *param = *reinterpret_cast<real*>(val);
+
+        vm->stack.pop();
+
+        if (vm->tracing)
+        {
+            Trace_Abort(vm);
+        }
+
+        return VM_OK;
+    }
+    else
+    {
+        return VM_ERROR;
+    }
+}
+
 int SunScript::GetParamInt(VirtualMachine* vm, int* param)
 {
     if (vm->stack.size() == 0) { return VM_ERROR; }
@@ -3079,6 +3315,10 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             {
                 ss << "OP_PUSH \"" << Read_String(programData, &vm->programCounter) << "\"" << std::endl;
             }
+            else if (ty == TY_REAL)
+            {
+                ss << "OP_PUSH " << Read_Real(programData, &vm->programCounter) << "D" << std::endl;
+            }
         }
             break;
         case OP_PUSH_LOCAL:
@@ -3135,6 +3375,19 @@ static void EmitString(std::vector<unsigned char>& data, const std::string& valu
     }
 
     data.push_back(0);
+}
+
+static void EmitReal(std::vector<unsigned char>& data, const real value)
+{
+    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&value);
+
+    for (int i = 0; i < SUN_REAL_SIZE; i+=4)
+    {
+        data.push_back(bytes[0]);
+        data.push_back(bytes[1]);
+        data.push_back(bytes[2]);
+        data.push_back(bytes[3]);
+    }
 }
 
 void SunScript::EmitInternalFunction(Program* program, ProgramBlock* blk, int func)
@@ -3228,6 +3481,13 @@ void SunScript::EmitPush(ProgramBlock* program, int value)
     program->data.push_back(OP_PUSH);
     program->data.push_back(TY_INT);
     EmitInt(program->data, value);
+}
+
+void SunScript::EmitPush(ProgramBlock* program, real value)
+{
+    program->data.push_back(OP_PUSH);
+    program->data.push_back(TY_REAL);
+    EmitReal(program->data, value);
 }
 
 void SunScript::EmitPush(ProgramBlock* program, const std::string& value)
