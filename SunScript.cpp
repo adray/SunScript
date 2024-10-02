@@ -3383,10 +3383,10 @@ static void EmitReal(std::vector<unsigned char>& data, const real value)
 
     for (int i = 0; i < SUN_REAL_SIZE; i+=4)
     {
-        data.push_back(bytes[0]);
-        data.push_back(bytes[1]);
-        data.push_back(bytes[2]);
-        data.push_back(bytes[3]);
+        data.push_back(bytes[i]);
+        data.push_back(bytes[i+1]);
+        data.push_back(bytes[i+2]);
+        data.push_back(bytes[i+3]);
     }
 }
 
