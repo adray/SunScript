@@ -43,6 +43,28 @@ enum vm_register
     VM_REGISTER_MAX = 0x10
 };
 
+enum vm_sse_register
+{
+    VM_SSE_REGISTER_XMM0 = 0x0,
+    VM_SSE_REGISTER_XMM1 = 0x1,
+    VM_SSE_REGISTER_XMM2 = 0x2,
+    VM_SSE_REGISTER_XMM3 = 0x3,
+    VM_SSE_REGISTER_XMM4 = 0x4,
+    VM_SSE_REGISTER_XMM5 = 0x5,
+    VM_SSE_REGISTER_XMM6 = 0x6,
+    VM_SSE_REGISTER_XMM7 = 0x7,
+    VM_SSE_REGISTER_XMM8 = 0x8,
+    VM_SSE_REGISTER_XMM9 = 0x9,
+    VM_SSE_REGISTER_XMM10 = 0xa,
+    VM_SSE_REGISTER_XMM11 = 0xb,
+    VM_SSE_REGISTER_XMM12 = 0xc,
+    VM_SSE_REGISTER_XMM13 = 0xd,
+    VM_SSE_REGISTER_XMM14 = 0xe,
+    VM_SSE_REGISTER_XMM15 = 0xf,
+
+    VM_SSE_REGISTER_MAX = 0x10
+};
+
 #if WIN32
 #define VM_ARG1 VM_REGISTER_ECX
 #define VM_ARG2 VM_REGISTER_EDX
@@ -50,6 +72,12 @@ enum vm_register
 #define VM_ARG4 VM_REGISTER_R9
 #define VM_ARG5 (-1)
 #define VM_ARG6 (-1)
+#define VM_SSE_ARG1 VM_SSE_REGISTER_XMM0
+#define VM_SSE_ARG2 VM_SSE_REGISTER_XMM1
+#define VM_SSE_ARG3 VM_SSE_REGISTER_XMM2
+#define VM_SSE_ARG4 VM_SSE_REGISTER_XMM3
+#define VM_SSE_ARG5 (-1)
+#define VM_SSE_ARG6 (-1)
 #define VM_MAX_ARGS 4
 #else
 #define VM_ARG1 VM_REGISTER_EDI
@@ -58,6 +86,12 @@ enum vm_register
 #define VM_ARG4 VM_REGISTER_ECX
 #define VM_ARG5 VM_REGISTER_R8
 #define VM_ARG6 VM_REGISTER_R9
+#define VM_SSE_ARG1 (-1)
+#define VM_SSE_ARG2 (-1)
+#define VM_SSE_ARG3 (-1)
+#define VM_SSE_ARG4 (-1)
+#define VM_SSE_ARG5 (-1)
+#define VM_SSE_ARG6 (-1)
 #define VM_MAX_ARGS 6
 #endif
 
@@ -99,7 +133,9 @@ enum vm_instruction_encoding
     VMI_ENC_MI = 3,     // destination M, source immediate
     VMI_ENC_M = 4,      // destination and source R/M
     VMI_ENC_OI = 5,     // destination opcode rd (w), source immediate
-    VMI_ENC_D = 6       // jump instruction
+    VMI_ENC_D = 6,      // jump instruction
+    VMI_ENC_A = 7,      // destination R, source R/M
+    VMI_ENC_C = 8       // destination R/M, source R
 };
 
 enum vm_instructions
@@ -163,6 +199,36 @@ enum vm_instructions
     VMI_MAX_INSTRUCTIONS
 };
 
+enum vm_sse_instructions
+{
+    VMI_SSE_MOVSD_SRC_REG_DST_REG,
+    VMI_SSE_MOVSD_SRC_REG_DST_MEM,
+    VMI_SSE_MOVSD_SRC_MEM_DST_REG,
+
+    VMI_SSE_ADDPD_SRC_REG_DST_REG,
+
+    VMI_SSE_ADDSD_SRC_REG_DST_REG,
+    VMI_SSE_ADDSD_SRC_MEM_DST_REG,
+
+    VMI_SSE_SUBSD_SRC_REG_DST_REG,
+    VMI_SSE_SUBSD_SRC_MEM_DST_REG,
+
+    VMI_SSE_MULSD_SRC_REG_DST_REG,
+    VMI_SSE_MULSD_SRC_MEM_DST_REG,
+
+    VMI_SSE_DIVSD_SRC_REG_DST_REG,
+    VMI_SSE_DIVSD_SRC_MEM_DST_REG,
+
+    VMI_SSE_CVTSI2SD_SRC_REG_DST_REG,
+    VMI_SSE_CVTSI2SD_SRC_MEM_DST_REG,
+
+    VMI_SSE_UCOMISD_SRC_REG_DST_REG,
+    VMI_SSE_UCOMISD_SRC_MEM_DST_REG,
+
+    // End of instructions
+    VMI_SSE_MAX_INSTRUCTIONS
+};
+
 struct vm_instruction
 {
     unsigned char rex;
@@ -173,8 +239,22 @@ struct vm_instruction
     unsigned char enc;
 };
 
+struct vm_sse_instruction
+{
+    unsigned char rex;
+    unsigned char ins1;
+    unsigned char ins2;
+    unsigned char ins3;
+    unsigned char type;
+    unsigned char code;
+    unsigned char enc;
+};
+
 #define INS(rex, ins, subins, type, code, enc) \
     { (unsigned char)rex, (unsigned char)ins, (unsigned char)subins, (unsigned char)type, (unsigned char)code, (unsigned char)enc }
+
+#define SSE_INS(rex, ins1, ins2, ins3, type, code, enc) \
+    { (unsigned char)rex, (unsigned char)ins1, (unsigned char)ins2, (unsigned char)ins3, (unsigned char)type, (unsigned char)code, (unsigned char)enc }
 
 #define VMI_UNUSED 0xFF
 
@@ -235,6 +315,39 @@ static constexpr vm_instruction gInstructions[VMI_MAX_INSTRUCTIONS] = {
     INS(0x48, 0xF7, 0x7, VM_INSTRUCTION_UNARY, CODE_UR, VMI_ENC_M),     // VMI_IDIV_SRC_REG
     INS(0x48, 0xF7, 0x7, VM_INSTRUCTION_UNARY, CODE_UMO, VMI_ENC_M),     // VMI_IDIV_SRC_MEM
 };
+
+static constexpr vm_sse_instruction gInstructions_SSE[VMI_SSE_MAX_INSTRUCTIONS] = {
+    SSE_INS(0x0, 0xF2, 0xF, 0x10, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_MOVSD_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF2, 0xF, 0x11, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_C), // VMI_SSE_MOVSD_SRC_REG_DST_MEM
+    SSE_INS(0x0, 0xF2, 0xF, 0x10, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_MOVSD_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0x66, 0xF, 0x58, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_ADDPD_SRC_REG_DST_REG
+
+
+    SSE_INS(0x0, 0xF2, 0xF, 0x58, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_ADDSD_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF2, 0xF, 0x58, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_ADDSD_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0xF2, 0xF, 0x5C, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_SUBSD_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF2, 0xF, 0x5C, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_SUBSD_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0xF2, 0xF, 0x59, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_MULSD_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF2, 0xF, 0x59, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_MULSD_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0xF2, 0xF, 0x5E, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_DIVSD_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF2, 0xF, 0x5E, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_DIVSD_SRC_MEM_DST_REG
+
+    SSE_INS(0x48, 0xF2, 0x0, 0x2A, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_CVTSI2SD_SRC_REG_DST_REG
+    SSE_INS(0x48, 0xF2, 0x0, 0x2A, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_CVTSI2SD_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0x66, 0x0, 0x2E, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A),   // VMI_SSE_UCOMISD_SRC_REG_DST_REG,
+    SSE_INS(0x0, 0x66, 0x0, 0x2E, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A),    // VMI_SSE_UCOMISD_SRC_MEM_DST_REG,
+};
+
+//=====================
+// R/M 0-2
+// Op/Reg 3-5
+// Mod 6-8
+//=====================
 
 static void vm_emit(const vm_instruction& ins, unsigned char* program, int& count)
 {
@@ -468,12 +581,73 @@ static void vm_emit_ui(const vm_instruction& ins, unsigned char* program, int& c
 }
 
 //================
-#define VM_ALIGN_16(x) ((x + 0xf) & ~(0xf))
 
-//static void vm_cpuid(const vm_instruction_table& table, unsigned char* program, int& count)
-//{
-//    vm_emit(table.cpuid, program, count);
-//}
+static void vm_emit_sse_brr(const vm_sse_instruction& ins, unsigned char* program, int& count, int src, int dst)
+{
+    assert(ins.code == CODE_BRR);
+    program[count++] = ins.ins1;
+    if (ins.rex > 0) { program[count++] = ins.rex; }
+    program[count++] = ins.ins2;
+    program[count++] = ins.ins3;
+
+    if (ins.enc == VMI_ENC_A)
+    {
+        program[count++] = (((dst % 8) & 0x7) << 3) | (0x3 << 6) | ((src % 8) & 0x7);
+    }
+    else if (ins.enc == VMI_ENC_C)
+    {
+        program[count++] = (((src % 8) & 0x7) << 3) | (0x3 << 6) | ((dst % 8) & 0x7);
+    }
+}
+
+static void vm_emit_sse_brmo(const vm_sse_instruction& ins, unsigned char* program, int& count, int src, int dst, int src_offset)
+{
+    assert(ins.code == CODE_BRMO);
+    assert(ins.enc == VMI_ENC_A);
+    program[count++] = ins.ins1;
+    if (ins.rex > 0) { program[count++] = ins.rex; }
+    program[count++] = ins.ins2;
+    program[count++] = ins.ins3;
+
+    if (dst == VM_REGISTER_ESP)
+    {
+
+    }
+    else
+    {
+        program[count++] = (((dst % 8) & 0x7) << 3) | (0x2 << 6) | ((src % 8) & 0x7);
+        program[count++] = src_offset & 0xFF;
+        program[count++] = (src_offset >> 8) & 0xFF;
+        program[count++] = (src_offset >> 16) & 0xFF;
+        program[count++] = (src_offset >> 24) & 0xFF;
+    }
+}
+
+static void vm_emit_sse_bmro(const vm_sse_instruction& ins, unsigned char* program, int& count, int src, int dst, int dst_offset)
+{
+    assert(ins.code == CODE_BMRO);
+    assert(ins.enc == VMI_ENC_A);
+    program[count++] = ins.ins1;
+    if (ins.rex > 0) { program[count++] = ins.rex; }
+    program[count++] = ins.ins2;
+    program[count++] = ins.ins3;
+
+    if (src == VM_REGISTER_ESP)
+    {
+
+    }
+    else
+    {
+        program[count++] = (((src % 8) & 0x7) << 3) | (0x2 << 6) | ((dst % 8) & 0x7);
+        program[count++] = dst_offset & 0xFF;
+        program[count++] = (dst_offset >> 8) & 0xFF;
+        program[count++] = (dst_offset >> 16) & 0xFF;
+        program[count++] = (dst_offset >> 24) & 0xFF;
+    }
+}
+
+//================
+#define VM_ALIGN_16(x) ((x + 0xf) & ~(0xf))
 
 static void vm_reserve(unsigned char* program, int& count)
 {
@@ -770,6 +944,76 @@ inline static void vm_neg_memory_x64(unsigned char* program, int& count, int reg
 inline static void vm_neg_reg_x64(unsigned char* program, int& count, int reg)
 {
     vm_emit_ur(gInstructions[VMI_NEG64_DST_REG], program, count, reg);
+}
+
+inline static void vm_movsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
+{
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_MOVSD_SRC_REG_DST_REG], program, count, src, dst);
+}
+
+inline static void vm_movsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+{
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_MOVSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+}
+
+inline static void vm_addsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
+{
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_ADDSD_SRC_REG_DST_REG], program, count, src, dst);
+}
+
+inline static void vm_addsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+{
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_ADDSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+}
+
+inline static void vm_subsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
+{
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_SUBSD_SRC_REG_DST_REG], program, count, src, dst);
+}
+
+inline static void vm_subsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+{
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_SUBSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+}
+
+inline static void vm_mulsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
+{
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_REG_DST_REG], program, count, src, dst);
+}
+
+inline static void vm_mulsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
+{
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
+}
+
+inline static void vm_divsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
+{
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_DIVSD_SRC_REG_DST_REG], program, count, src, dst);
+}
+
+inline static void vm_divsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
+{
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_DIVSD_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
+}
+
+inline static void vm_cvtitod_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+{
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_CVTSI2SD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+}
+
+inline static void vm_cvtitod_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
+{
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_CVTSI2SD_SRC_REG_DST_REG], program, count, src, dst);
+}
+
+inline static void vm_ucmpd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
+{
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_REG_DST_REG], program, count, src, dst);
+}
+
+inline static void vm_ucmpd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+{
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
 }
 
 //===========================
@@ -3244,6 +3488,35 @@ static void vm_jit_entry_stub(JIT_Manager* manager)
 }
 
 //========================
+
+#ifdef WIN32
+#include <intrin.h>
+int SunScript::JIT_Capabilities(char vendor[13])
+{
+    int regs[4]; /* EAX EBX ECX EDX */
+    __cpuid(regs, 0x0);
+
+    std::memcpy(&vendor[0], &regs[1], sizeof(int));
+    std::memcpy(&vendor[4], &regs[3], sizeof(int));
+    std::memcpy(&vendor[8], &regs[2], sizeof(int));
+
+    vendor[12] = '\0';
+
+    __cpuid(regs, 0x1);
+
+    int flags = 0x0;
+    if (regs[2] & 0x1) { flags |= SUN_CAPS_SSE3; }
+    if (regs[2] & 0x19) { flags |= SUN_CAPS_SSE4_1; }
+    if (regs[2] & 0x20) { flags |= SUN_CAPS_SSE4_2; }
+
+    return flags;
+}
+#else
+int SunScript::JIT_Capabilities(char vendor[13])
+{
+    return 0;
+}
+#endif
 
 void SunScript::JIT_Setup(Jit* jit)
 {

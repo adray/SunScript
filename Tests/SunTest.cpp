@@ -219,8 +219,31 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     }
 }
 
+static void PrintCaps()
+{
+    char vendor[13];
+    const int flags = JIT_Capabilities(vendor);
+
+    std::cout << vendor;
+    if ((flags & SUN_CAPS_SSE3) == SUN_CAPS_SSE3)
+    {
+        std::cout << " SSE3";
+    }
+    if ((flags & SUN_CAPS_SSE4_1) == SUN_CAPS_SSE4_1)
+    {
+        std::cout << " SSE4.1";
+    }
+    if ((flags & SUN_CAPS_SSE4_2) == SUN_CAPS_SSE4_2)
+    {
+        std::cout << " SSE4.2";
+    }
+    std::cout << std::endl;
+}
+
 void SunScript::RunTestSuite(const std::string& directory, int opts)
 {
+    PrintCaps();
+
     std::cout << "Running test suite" << std::endl;
 
     SunTestSuite* suite = new SunTestSuite();

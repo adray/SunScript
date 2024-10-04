@@ -9,6 +9,12 @@ namespace SunScript
     struct VirtualMachine;
     struct Jit;
 
+    constexpr int SUN_CAPS_NONE = 0x0;
+    constexpr int SUN_CAPS_SSE3 = 0x1;
+    constexpr int SUN_CAPS_SSE4_1 = 0x2;
+    constexpr int SUN_CAPS_SSE4_2 = 0x4;
+
+    int JIT_Capabilities(char vendor[13]);
     void JIT_Setup(Jit* jit);
     void* JIT_Initialize();
     void JIT_DumpTrace(unsigned char* trace, unsigned int size);
