@@ -78,7 +78,10 @@ enum vm_sse_register
 #define VM_SSE_ARG4 VM_SSE_REGISTER_XMM3
 #define VM_SSE_ARG5 (-1)
 #define VM_SSE_ARG6 (-1)
+#define VM_SSE_ARG7 (-1)
+#define VM_SSE_ARG8 (-1)
 #define VM_MAX_ARGS 4
+#define VM_MAX_SSE_ARGS 4
 #else
 #define VM_ARG1 VM_REGISTER_EDI
 #define VM_ARG2 VM_REGISTER_ESI
@@ -86,13 +89,16 @@ enum vm_sse_register
 #define VM_ARG4 VM_REGISTER_ECX
 #define VM_ARG5 VM_REGISTER_R8
 #define VM_ARG6 VM_REGISTER_R9
-#define VM_SSE_ARG1 (-1)
-#define VM_SSE_ARG2 (-1)
-#define VM_SSE_ARG3 (-1)
-#define VM_SSE_ARG4 (-1)
-#define VM_SSE_ARG5 (-1)
-#define VM_SSE_ARG6 (-1)
+#define VM_SSE_ARG1 VM_SSE_REGISTER_XMM0
+#define VM_SSE_ARG2 VM_SSE_REGISTER_XMM1
+#define VM_SSE_ARG3 VM_SSE_REGISTER_XMM2
+#define VM_SSE_ARG4 VM_SSE_REGISTER_XMM3
+#define VM_SSE_ARG5 VM_SSE_REGISTER_XMM4
+#define VM_SSE_ARG6 VM_SSE_REGISTER_XMM5
+#define VM_SSE_ARG7 VM_SSE_REGISTER_XMM6
+#define VM_SSE_ARG8 VM_SSE_REGISTER_XMM7
 #define VM_MAX_ARGS 6
+#define VM_MAX_SSE_ARGS 8
 #endif
 
 enum vm_instruction_type
@@ -336,8 +342,8 @@ static constexpr vm_sse_instruction gInstructions_SSE[VMI_SSE_MAX_INSTRUCTIONS] 
     SSE_INS(0x0, 0xF2, 0xF, 0x5E, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_DIVSD_SRC_REG_DST_REG
     SSE_INS(0x0, 0xF2, 0xF, 0x5E, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_DIVSD_SRC_MEM_DST_REG
 
-    SSE_INS(0x48, 0xF2, 0x0, 0x2A, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_CVTSI2SD_SRC_REG_DST_REG
-    SSE_INS(0x48, 0xF2, 0x0, 0x2A, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_CVTSI2SD_SRC_MEM_DST_REG
+    SSE_INS(0x48, 0xF2, 0xF, 0x2A, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_CVTSI2SD_SRC_REG_DST_REG
+    SSE_INS(0x48, 0xF2, 0xF, 0x2A, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_CVTSI2SD_SRC_MEM_DST_REG
 
     SSE_INS(0x0, 0x66, 0x0, 0x2E, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A),   // VMI_SSE_UCOMISD_SRC_REG_DST_REG,
     SSE_INS(0x0, 0x66, 0x0, 0x2E, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A),    // VMI_SSE_UCOMISD_SRC_MEM_DST_REG,
@@ -382,6 +388,7 @@ static void vm_emit_um(const vm_instruction& ins, unsigned char* program, int& c
 
     if (reg == VM_REGISTER_ESP)
     {
+        std::cout << "vm_emit_um" << std::endl;
         program[count++] = ((ins.subins & 0x7) << 3) | 0x4 | (0x0 << 6);
         program[count++] = 0x24; // SIB byte
     }
@@ -423,15 +430,7 @@ static void vm_emit_bri(const vm_instruction& ins, unsigned char* program, int& 
     {
         program[count++] = ins.rex | (reg >= VM_REGISTER_R8 ? 0x1 : 0x0);
         program[count++] = ins.ins;
-
-        if (reg == VM_REGISTER_ESP)
-        {
-            program[count++] = (ins.subins << 3) | ((reg % 8) & 0x7) | (0x3 << 6);
-        }
-        else
-        {
-            program[count++] = (ins.subins << 3) | (reg % 8) | (0x3 << 6);
-        }
+        program[count++] = (ins.subins << 3) | (reg % 8) | (0x3 << 6);
     }
     else
     {
@@ -586,7 +585,11 @@ static void vm_emit_sse_brr(const vm_sse_instruction& ins, unsigned char* progra
 {
     assert(ins.code == CODE_BRR);
     program[count++] = ins.ins1;
-    if (ins.rex > 0) { program[count++] = ins.rex; }
+    unsigned char rex = ins.rex;
+    if (dst >= VM_SSE_REGISTER_XMM8) { rex |= 0x1 | (1 << 6); }
+    if (src >= VM_SSE_REGISTER_XMM8) { rex |= 0x4 | (1 << 6); }
+
+    if (rex > 0) { program[count++] = rex;  }
     program[count++] = ins.ins2;
     program[count++] = ins.ins3;
 
@@ -605,13 +608,23 @@ static void vm_emit_sse_brmo(const vm_sse_instruction& ins, unsigned char* progr
     assert(ins.code == CODE_BRMO);
     assert(ins.enc == VMI_ENC_A);
     program[count++] = ins.ins1;
-    if (ins.rex > 0) { program[count++] = ins.rex; }
+    unsigned char rex = ins.rex;
+    if (src >= VM_SSE_REGISTER_XMM8) { rex |= 0x1 | (1 << 6); }
+    if (dst >= VM_REGISTER_R8) { rex |= 0x4 | (1 << 6); }
+
+    if (rex > 0) { program[count++] = rex;  }
+
     program[count++] = ins.ins2;
     program[count++] = ins.ins3;
 
-    if (dst == VM_REGISTER_ESP)
+    if (src == VM_REGISTER_ESP)
     {
-
+        program[count++] = (((dst % 8) & 0x7) << 3) | 0x4 | (0x2 << 6);
+        program[count++] = 0x24; // SIB byte
+        program[count++] = (unsigned char)(src_offset & 0xff);
+        program[count++] = (unsigned char)((src_offset >> 8) & 0xff);
+        program[count++] = (unsigned char)((src_offset >> 16) & 0xff);
+        program[count++] = (unsigned char)((src_offset >> 24) & 0xff); 
     }
     else
     {
@@ -628,13 +641,24 @@ static void vm_emit_sse_bmro(const vm_sse_instruction& ins, unsigned char* progr
     assert(ins.code == CODE_BMRO);
     assert(ins.enc == VMI_ENC_A);
     program[count++] = ins.ins1;
-    if (ins.rex > 0) { program[count++] = ins.rex; }
+    unsigned char rex = ins.rex;
+
+    if (dst >= VM_SSE_REGISTER_XMM8) { rex |= 0x1 | (1 << 6); }
+    if (src >= VM_REGISTER_R8) { rex |= 0x4 | (1 << 6); }
+
+    if (rex > 0) { program[count++] = rex;  }
+
     program[count++] = ins.ins2;
     program[count++] = ins.ins3;
 
-    if (src == VM_REGISTER_ESP)
+    if (dst == VM_REGISTER_ESP)
     {
-
+        program[count++] = (((src % 8) & 0x7) << 3) | 0x4 | (0x2 << 6);
+        program[count++] = 0x24; // SIB byte
+        program[count++] = (unsigned char)(dst_offset & 0xff);
+        program[count++] = (unsigned char)((dst_offset >> 8) & 0xff);
+        program[count++] = (unsigned char)((dst_offset >> 16) & 0xff);
+        program[count++] = (unsigned char)((dst_offset >> 24) & 0xff);
     }
     else
     {
@@ -644,6 +668,27 @@ static void vm_emit_sse_bmro(const vm_sse_instruction& ins, unsigned char* progr
         program[count++] = (dst_offset >> 16) & 0xFF;
         program[count++] = (dst_offset >> 24) & 0xFF;
     }
+}
+
+static void vm_emit_sse_brm(const vm_sse_instruction& ins, unsigned char* program, int& count, int dst, long long addr)
+{
+    assert(ins.code == CODE_BMRO);
+    assert(ins.enc == VMI_ENC_A);
+    program[count++] = ins.ins1;
+    unsigned char rex = ins.rex;
+
+    if (dst >= VM_SSE_REGISTER_XMM8) { rex |= 0x4 | (1 << 6); }
+
+    if (rex > 0) { program[count++] = rex;  }
+
+    program[count++] = ins.ins2;
+    program[count++] = ins.ins3;
+
+    program[count++] = (((dst % 8) & 0x7) << 3) | 0x5 | (0x0 << 6);
+    program[count++] = (unsigned char)(addr & 0xff);
+    program[count++] = (unsigned char)((addr >> 8) & 0xff);
+    program[count++] = (unsigned char)((addr >> 16) & 0xff);
+    program[count++] = (unsigned char)((addr >> 24) & 0xff);
 }
 
 //================
@@ -951,9 +996,19 @@ inline static void vm_movsd_reg_to_reg_x64(unsigned char* program, int& count, i
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_MOVSD_SRC_REG_DST_REG], program, count, src, dst);
 }
 
-inline static void vm_movsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+inline static void vm_movsd_reg_to_memory_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
+{
+    vm_emit_sse_bmro(gInstructions_SSE[VMI_SSE_MOVSD_SRC_REG_DST_MEM], program, count, dst, src, dst_offset);
+}
+
+inline static void vm_movsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_MOVSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+}
+
+inline static void vm_movsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, long long addr)
+{
+    vm_emit_sse_brm(gInstructions_SSE[VMI_SSE_MOVSD_SRC_MEM_DST_REG], program, count, dst, addr);
 }
 
 inline static void vm_addsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
@@ -961,7 +1016,7 @@ inline static void vm_addsd_reg_to_reg_x64(unsigned char* program, int& count, i
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_ADDSD_SRC_REG_DST_REG], program, count, src, dst);
 }
 
-inline static void vm_addsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+inline static void vm_addsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_ADDSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
 }
@@ -971,7 +1026,7 @@ inline static void vm_subsd_reg_to_reg_x64(unsigned char* program, int& count, i
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_SUBSD_SRC_REG_DST_REG], program, count, src, dst);
 }
 
-inline static void vm_subsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+inline static void vm_subsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_SUBSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
 }
@@ -981,7 +1036,7 @@ inline static void vm_mulsd_reg_to_reg_x64(unsigned char* program, int& count, i
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_REG_DST_REG], program, count, src, dst);
 }
 
-inline static void vm_mulsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
+inline static void vm_mulsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
 {
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
 }
@@ -991,12 +1046,12 @@ inline static void vm_divsd_reg_to_reg_x64(unsigned char* program, int& count, i
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_DIVSD_SRC_REG_DST_REG], program, count, src, dst);
 }
 
-inline static void vm_divsd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
+inline static void vm_divsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
 {
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_DIVSD_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
 }
 
-inline static void vm_cvtitod_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+inline static void vm_cvtitod_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_CVTSI2SD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
 }
@@ -1011,7 +1066,7 @@ inline static void vm_ucmpd_reg_to_reg_x64(unsigned char* program, int& count, i
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_REG_DST_REG], program, count, src, dst);
 }
 
-inline static void vm_ucmpd_mem_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
+inline static void vm_ucmpd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
 }
@@ -1021,7 +1076,7 @@ inline static void vm_ucmpd_mem_to_reg_x64(unsigned char* program, int& count, i
 //===========================
 static int vm_jit_read_int(unsigned char* program, unsigned int* pc);
 static std::string vm_jit_read_string(unsigned char* program, unsigned int* pc);
-
+static real vm_jit_read_real(unsigned char* program, unsigned int* pc);
 
 //==================================
 // Basic block descriptor
@@ -1519,6 +1574,7 @@ private:
 
     std::vector<int> liveness;
     std::vector<Allocation> allocations;
+    std::vector<Allocation> sse;
     std::vector<JIT_Allocation> registers;
 };
 
@@ -1698,6 +1754,27 @@ void JIT_Analyzer::InitializeAllocations()
 #if VM_MAX_ARGS == 6
     allocations[VM_ARG5].SetEnabled(false);
     allocations[VM_ARG6].SetEnabled(false);
+#endif
+
+    sse.resize(VM_SSE_REGISTER_MAX);
+    for (size_t i = 0; i < sse.size(); i++)
+    {
+        auto& a = sse[i];
+        a.Initialize(int(i), true);
+    }
+
+    // Reserved registers
+
+    sse[VM_SSE_ARG1].SetEnabled(false);
+    sse[VM_SSE_ARG2].SetEnabled(false);
+    sse[VM_SSE_ARG3].SetEnabled(false);
+    sse[VM_SSE_ARG4].SetEnabled(false);
+    sse[VM_SSE_ARG5].SetEnabled(false);
+    sse[VM_SSE_ARG6].SetEnabled(false);
+
+#if VM_MAX_SSE_ARGS == 8
+    sse[VM_SSE_ARG7].SetEnabled(false);
+    sse[VM_SSE_ARG8].SetEnabled(false);
 #endif
 }
 
@@ -2340,6 +2417,29 @@ static int vm_jit_read_int(unsigned char* program, unsigned int* pc)
     return a | (b << 8) | (c << 16) | (d << 24);
 }
 
+static real vm_jit_read_real(unsigned char* program, unsigned int* pc)
+{
+    real* r = reinterpret_cast<real*>(pc);
+    pc += SUN_REAL_SIZE;
+    return *r;
+}
+
+static int vm_jit_decode_dst_sse(const JIT_Allocation& al)
+{
+    int dst = 0;
+    switch (al.type)
+    {
+        case ST_REG:
+            dst = al.reg;
+            break;
+        case ST_STACK:
+            dst = VM_SSE_REGISTER_XMM0;
+            break;
+    }
+
+    return dst;
+}
+
 static int vm_jit_decode_dst(const JIT_Allocation& al)
 {
     int dst = 0;
@@ -2354,6 +2454,22 @@ static int vm_jit_decode_dst(const JIT_Allocation& al)
     }
 
     return dst;
+}
+
+static void vm_jit_mov_sse(Jitter* jitter, const JIT_Allocation& al, int dst)
+{
+    switch (al.type)
+    {
+        case ST_REG:
+            if (al.reg != dst)
+            {
+                vm_movsd_reg_to_reg_x64(jitter->jit, jitter->count, dst, al.reg);
+            }
+            break;
+        case ST_STACK:
+            vm_movsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, al.reg, al.pos);
+            break;
+    }
 }
 
 static void vm_jit_mov(Jitter* jitter, const JIT_Allocation& al, int dst)
@@ -2442,6 +2558,27 @@ static void vm_jit_cmp_int(Jitter* jitter)
             break;
         case ST_STACK:
             vm_cmp_reg_to_memory_x64(jitter->jit, jitter->count, a1.reg, a1.pos, dst);
+            break;
+    }
+}
+
+static void vm_jit_cmp_real(Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+
+    const int dst = vm_jit_decode_dst_sse(a1);
+    vm_jit_mov_sse(jitter, a1, dst);
+
+    switch (a2.type)
+    {
+        case ST_REG:
+            vm_ucmpd_reg_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg);
+            break;
+        case ST_STACK:
+            vm_ucmpd_memory_to_reg_x64(jitter->jit, jitter->count, dst, a2.pos, a2.reg);
             break;
     }
 }
@@ -2631,6 +2768,114 @@ static void vm_jit_append_string_string(Jitter* jitter)
     }
 }
 
+static void vm_jit_add_real(Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    const int dst = vm_jit_decode_dst_sse(a3);
+    vm_jit_mov_sse(jitter, a1, dst);
+
+    switch (a2.type)
+    {
+        case ST_REG:
+            vm_addsd_reg_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg);
+            break;
+        case ST_STACK:
+            vm_addsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg, a2.pos);
+            break;
+    }
+
+    if (a3.type == ST_STACK)
+    {
+        vm_movsd_reg_to_memory_x64(jitter->jit, jitter->count, a3.reg, a3.pos, dst);
+    }
+}
+
+static void vm_jit_sub_real(Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    const int dst = vm_jit_decode_dst_sse(a3);
+    vm_jit_mov_sse(jitter, a1, dst);
+
+    switch (a2.type)
+    {
+        case ST_REG:
+            vm_subsd_reg_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg);
+            break;
+        case ST_STACK:
+            vm_subsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg, a2.pos);
+            break;
+    }
+
+    if (a3.type == ST_STACK)
+    {
+        vm_movsd_reg_to_memory_x64(jitter->jit, jitter->count, a3.reg, a3.pos, dst);
+    }
+}
+
+static void vm_jit_mul_real(Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    const int dst = vm_jit_decode_dst_sse(a3);
+    vm_jit_mov_sse(jitter, a1, dst);
+
+    switch (a2.type)
+    {
+        case ST_REG:
+            vm_mulsd_reg_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg);
+            break;
+        case ST_STACK:
+            vm_mulsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg, a2.pos);
+            break;
+    }
+
+    if (a3.type == ST_STACK)
+    {
+        vm_movsd_reg_to_memory_x64(jitter->jit, jitter->count, a3.reg, a3.pos, dst);
+    }
+}
+
+static void vm_jit_div_real(Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    const int dst = vm_jit_decode_dst_sse(a3);
+    vm_jit_mov_sse(jitter, a1, dst);
+
+    switch (a2.type)
+    {
+        case ST_REG:
+            vm_divsd_reg_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg);
+            break;
+        case ST_STACK:
+            vm_divsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg, a2.pos);
+            break;
+    }
+
+    if (a3.type == ST_STACK)
+    {
+        vm_movsd_reg_to_memory_x64(jitter->jit, jitter->count, a3.reg, a3.pos, dst);
+    }
+}
+
 static void vm_jit_add_int(Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
@@ -2792,6 +3037,15 @@ static void vm_jit_neg_int(Jitter* jitter)
     {
         vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a2.reg, a2.pos, dst);
     }
+}
+
+static void vm_jit_load_real(Jitter* jitter)
+{
+    const real* val = reinterpret_cast<real*>(&jitter->program[*jitter->pc]);
+    (*jitter->pc) += SUN_REAL_SIZE;
+    const JIT_Allocation a = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    vm_movsd_memory_to_reg_x64(jitter->jit, jitter->count, a.reg, (long long)val); 
 }
 
 static void vm_jit_load_string(Jitter* jitter)
@@ -2987,6 +3241,31 @@ static void vm_jit_unbox(VirtualMachine* vm, Jitter* jitter)
 inline static void vm_jit_epilog(Jitter* jitter, const int stacksize)
 {
     vm_add_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, stacksize);
+}
+
+static void vm_jit_conv_int_to_real(Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+
+    JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1); // int
+    JIT_Allocation a2 = jitter->analyzer.GetAllocation(jitter->refIndex); // real
+
+    const int dst = vm_jit_decode_dst_sse(a2);
+
+    switch (a1.type)
+    {
+        case ST_REG:
+            vm_cvtitod_reg_to_reg_x64(jitter->jit, jitter->count, dst, a1.reg);
+            break;
+        case ST_STACK:
+            vm_cvtitod_memory_to_reg_x64(jitter->jit, jitter->count, dst, a1.reg, a1.pos);
+            break;
+    }
+
+    if (a2.type == ST_STACK)
+    {
+        vm_jit_mov_sse(jitter, a2, dst);
+    }
 }
 
 static void vm_jit_phi(VirtualMachine* vm, Jitter* jitter)
@@ -3207,6 +3486,20 @@ static void vm_jit_load_int_local(VirtualMachine* vm, Jitter* jitter)
     vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_ARG1, id * 16 + 8);
 }
 
+static void vm_jit_load_real_local(VirtualMachine* vm, Jitter* jitter)
+{
+    const int id = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
+
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_record);
+    vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_ARG1, 0);
+
+    const int dst = vm_jit_decode_dst_sse(allocation);
+    vm_movsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_ARG1, id * 16 + 8);
+}
+
 static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
 {
     // Store non-volatile registers
@@ -3232,8 +3525,14 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_LOAD_STRING:
             vm_jit_load_string(jitter);
             break;
+        case IR_LOAD_REAL:
+            vm_jit_load_real(jitter);
+            break;
         case IR_ADD_INT:
             vm_jit_add_int(jitter);
+            break;
+        case IR_ADD_REAL:
+            vm_jit_add_real(jitter);
             break;
         case IR_APP_STRING_INT:
             vm_jit_append_string_int(jitter);
@@ -3253,11 +3552,17 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_CMP_STRING:
             vm_jit_cmp_string(jitter);
             break;
+        case IR_CMP_REAL:
+            vm_jit_cmp_real(jitter);
+            break;
         case IR_DECREMENT_INT:
             vm_jit_dec_int(jitter);
             break;
         case IR_DIV_INT:
             vm_jit_div_int(jitter);
+            break;
+        case IR_DIV_REAL:
+            vm_jit_div_real(jitter);
             break;
         case IR_GUARD:
             vm_jit_guard(jitter);
@@ -3277,8 +3582,14 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_MUL_INT:
             vm_jit_mul_int(jitter);
             break;
+        case IR_MUL_REAL:
+            vm_jit_mul_real(jitter);
+            break;
         case IR_SUB_INT:
             vm_jit_sub_int(jitter);
+            break;
+        case IR_SUB_REAL:
+            vm_jit_sub_real(jitter);
             break;
         case IR_UNARY_MINUS_INT:
             vm_jit_neg_int(jitter);
@@ -3300,6 +3611,9 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
             break;
         case IR_LOAD_STRING_LOCAL:
             vm_jit_load_string_local(vm, jitter);
+            break;
+        case IR_LOAD_REAL_LOCAL:
+            vm_jit_load_real_local(vm, jitter);
             break;
         default:
             abort();
@@ -3505,16 +3819,33 @@ int SunScript::JIT_Capabilities(char vendor[13])
     __cpuid(regs, 0x1);
 
     int flags = 0x0;
-    if (regs[2] & 0x1) { flags |= SUN_CAPS_SSE3; }
-    if (regs[2] & 0x19) { flags |= SUN_CAPS_SSE4_1; }
-    if (regs[2] & 0x20) { flags |= SUN_CAPS_SSE4_2; }
+    if (regs[2] & 1) { flags |= SUN_CAPS_SSE3; }
+    if ((regs[2] >> 19) & 1) { flags |= SUN_CAPS_SSE4_1; }
+    if ((regs[2] >> 20) & 1) { flags |= SUN_CAPS_SSE4_2; }
 
     return flags;
 }
 #else
+#include <cpuid.h>
 int SunScript::JIT_Capabilities(char vendor[13])
 {
-    return 0;
+    unsigned int regs[4]; /* EAX EBX ECX EDX */
+    __get_cpuid(0x0, &regs[0], &regs[1], &regs[2], &regs[3]);
+
+    std::memcpy(&vendor[0], &regs[1], sizeof(unsigned int));
+    std::memcpy(&vendor[4], &regs[3], sizeof(unsigned int));
+    std::memcpy(&vendor[8], &regs[2], sizeof(unsigned int));
+
+    vendor[12] = '\0';
+
+    __get_cpuid(0x1, &regs[0], &regs[1], &regs[2], &regs[3]);
+
+    int flags = 0x0;
+    if (regs[2] & 1) { flags |= SUN_CAPS_SSE3; }
+    if ((regs[2] >> 19) & 1) { flags |= SUN_CAPS_SSE4_1; }
+    if ((regs[2] >> 20) & 1) { flags |= SUN_CAPS_SSE4_2; }
+
+    return flags;
 }
 #endif
 
@@ -3617,6 +3948,11 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             op2 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_ADD_INT " << op1 << " " << op2 << std::endl;
             break;
+        case IR_ADD_REAL:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_ADD_REAL " << op1 << " " << op2 << std::endl;
+            break;
         case IR_APP_INT_STRING:
             op1 = vm_jit_read_int(trace, &pc);
             op2 = vm_jit_read_int(trace, &pc);
@@ -3651,6 +3987,11 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             op2 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_CMP_INT " << op1 << " " << op2 << std::endl;
             break;
+        case IR_CMP_REAL:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_CMP_REAL " << op1 << " " << op2 << std::endl;
+            break;
         case IR_CMP_STRING:
             op1 = vm_jit_read_int(trace, &pc);
             op2 = vm_jit_read_int(trace, &pc);
@@ -3664,6 +4005,11 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             op2 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_DIV_INT " << op1 << " " << op2 << std::endl;
             break;
+        case IR_DIV_REAL:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_DIV_REAL " << op1 << " " << op2 << std::endl;
+            break;
         case IR_GUARD:
             std::cout << " IR_GUARD " << int(trace[pc++]) << std::endl;
             break;
@@ -3673,6 +4019,10 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
         case IR_LOAD_INT:
             op1 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_LOAD_INT " << op1 << std::endl;
+            break;
+        case IR_LOAD_REAL:
+            op1 = vm_jit_read_real(trace, &pc);
+            std::cout << " IR_LOAD_REAL " << op1 << std::endl;
             break;
         case IR_LOAD_STRING:
             std::cout << " IR_LOAD_STRING " << vm_jit_read_string(trace, &pc) << std::endl;
@@ -3691,10 +4041,20 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             op2 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_MUL_INT " << op1 << " " << op2 << std::endl;
             break;
+        case IR_MUL_REAL:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_MUL_REAL " << op1 << " " << op2 << std::endl;
+            break;
         case IR_SUB_INT:
             op1 = vm_jit_read_int(trace, &pc);
             op2 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_SUB_INT " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_SUB_REAL:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_SUB_REAL " << op1 << " " << op2 << std::endl;
             break;
         case IR_UNARY_MINUS_INT:
             std::cout << " IR_UNARY_MINUS_INT " << vm_jit_read_int(trace, &pc) << std::endl;
@@ -3728,6 +4088,10 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
         case IR_LOAD_INT_LOCAL:
             op1 = trace[pc++];
             std::cout << " IR_LOAD_INT_LOCAL " << op1 << std::endl;
+            break;
+        case IR_LOAD_REAL_LOCAL:
+            op1 = trace[pc++];
+            std::cout << " IR_LOAD_REAL_LOCAL " << op1 << std::endl;
             break;
         case IR_LOAD_STRING_LOCAL:
             op1 = trace[pc++];

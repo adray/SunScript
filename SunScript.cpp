@@ -8,6 +8,7 @@
 #include <format>
 #include <assert.h>
 #include <array>
+#include <cmath>
 
 using namespace SunScript;
 
@@ -2458,7 +2459,7 @@ static void Op_Compare(VirtualMachine* vm)
     else if (vm->mm.GetType(item1) == TY_REAL && vm->mm.GetType(item2) == TY_REAL)
     {
         real cmp = *reinterpret_cast<real*>(item2) - *reinterpret_cast<real*>(item1);
-        if (cmp == 0.0 || isnan(cmp))
+        if (cmp == 0.0 || std::isnan(cmp))
         {
             vm->comparer = 0;
         }

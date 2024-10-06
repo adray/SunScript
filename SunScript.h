@@ -62,29 +62,41 @@ namespace SunScript
 
     constexpr unsigned char IR_LOAD_INT = 0x0;
     constexpr unsigned char IR_LOAD_STRING = 0x1;
+    constexpr unsigned char IR_LOAD_REAL = 0x2;
     constexpr unsigned char IR_LOAD_INT_LOCAL = 0x10;
     constexpr unsigned char IR_LOAD_STRING_LOCAL = 0x11;
+    constexpr unsigned char IR_LOAD_REAL_LOCAL = 0x12;
     constexpr unsigned char IR_CALL = 0x20;
     constexpr unsigned char IR_YIELD = 0x21;
-    constexpr unsigned char IR_INCREMENT_INT = 0x40;
-    constexpr unsigned char IR_DECREMENT_INT = 0x41;
-    constexpr unsigned char IR_ADD_INT = 0x42;
-    constexpr unsigned char IR_SUB_INT = 0x43;
-    constexpr unsigned char IR_MUL_INT = 0x44;
-    constexpr unsigned char IR_DIV_INT = 0x45;
-    constexpr unsigned char IR_UNARY_MINUS_INT = 0x46;
+    constexpr unsigned char IR_INCREMENT_INT = 0x30;
+    constexpr unsigned char IR_DECREMENT_INT = 0x31;
+    constexpr unsigned char IR_INCREMENT_REAL = 0x32;
+    constexpr unsigned char IR_DECREMENT_REAL = 0x33;
+    constexpr unsigned char IR_ADD_INT = 0x34;
+    constexpr unsigned char IR_SUB_INT = 0x35;
+    constexpr unsigned char IR_MUL_INT = 0x36;
+    constexpr unsigned char IR_DIV_INT = 0x37;
+    constexpr unsigned char IR_UNARY_MINUS_INT = 0x38;
+    constexpr unsigned char IR_ADD_REAL = 0x39;
+    constexpr unsigned char IR_SUB_REAL = 0x3a;
+    constexpr unsigned char IR_MUL_REAL = 0x3b;
+    constexpr unsigned char IR_DIV_REAL = 0x3c;
     constexpr unsigned char IR_APP_INT_STRING = 0x47;
     constexpr unsigned char IR_APP_STRING_INT = 0x48;
     constexpr unsigned char IR_APP_STRING_STRING = 0x49;
+    constexpr unsigned char IR_APP_STRING_REAL = 0x4a;
+    constexpr unsigned char IR_APP_REAL_STRING = 0x4b;
     constexpr unsigned char IR_GUARD = 0x50;
     constexpr unsigned char IR_CMP_INT = 0x51;
     constexpr unsigned char IR_CMP_STRING = 0x52;
+    constexpr unsigned char IR_CMP_REAL = 0x53;
     constexpr unsigned char IR_LOOPBACK = 0x60;
     constexpr unsigned char IR_LOOPSTART = 0x61;
     constexpr unsigned char IR_LOOPEXIT = 0x62;
     constexpr unsigned char IR_PHI = 0x63;
     constexpr unsigned char IR_SNAP = 0x64;
     constexpr unsigned char IR_UNBOX = 0x65;
+    constexpr unsigned char IR_CONV_INT_TO_REAL = 0x70;
 
 #ifdef USE_SUN_FLOAT
     typedef float real;
