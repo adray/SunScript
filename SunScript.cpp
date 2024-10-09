@@ -458,6 +458,7 @@ namespace SunScript
         std::vector<Function> functions;
         std::vector<void*> locals;
         std::vector<unsigned char> trace;
+        std::vector<unsigned char> traceConstants;
         TraceTree tt;
         int (*handler)(VirtualMachine* vm);
         Jit jit;
@@ -621,6 +622,7 @@ inline static void Trace_Start(VirtualMachine* vm)
     vm->tracing = true;
     vm->tracingPaused = false;
     vm->trace.clear();
+    vm->traceConstants.clear();
     
     // Setup locals for the new trace.
     for (size_t i = 0; i < vm->locals.size(); i++)
@@ -638,6 +640,10 @@ inline static void Trace_Start(VirtualMachine* vm)
                 break;
             case TY_INT:
                 vm->trace.push_back(IR_LOAD_INT_LOCAL);
+                vm->trace.push_back(static_cast<unsigned char>(i));
+                break;
+            case TY_REAL:
+                vm->trace.push_back(IR_LOAD_REAL_LOCAL);
                 vm->trace.push_back(static_cast<unsigned char>(i));
                 break;
             default:
@@ -670,6 +676,18 @@ inline static void Trace_Restore(VirtualMachine* vm, Trace* trace)
     std::memcpy(vm->trace.data(), trace->trace.data(), trace->trace.size());
 }
 
+inline static void Trace_Real(VirtualMachine* vm, real val)
+{
+    unsigned char* data = reinterpret_cast<unsigned char*>(&val);
+    for (int i = 0; i < SUN_REAL_SIZE; i+=4)
+    {
+        vm->trace.push_back(data[i]);
+        vm->trace.push_back(data[i + 1]);
+        vm->trace.push_back(data[i + 2]);
+        vm->trace.push_back(data[i + 3]);
+    }
+}
+
 inline static void Trace_Int(VirtualMachine* vm, int val)
 {
     vm->trace.push_back(static_cast<unsigned char>(val & 0xFF));
@@ -687,16 +705,59 @@ inline static void Trace_String(VirtualMachine* vm, const char* str)
     vm->trace.push_back(0);
 }
 
+inline static void Trace_Constant(VirtualMachine* vm, real val)
+{
+    unsigned char* data = reinterpret_cast<unsigned char*>(&val);
+    for (int i = 0; i < SUN_REAL_SIZE; i += 4)
+    {
+        vm->traceConstants.push_back(data[i]);
+        vm->traceConstants.push_back(data[i + 1]);
+        vm->traceConstants.push_back(data[i + 2]);
+        vm->traceConstants.push_back(data[i + 3]);
+    }
+}
+
+inline static void Trace_Constant(VirtualMachine* vm, int val)
+{
+    vm->traceConstants.push_back(static_cast<unsigned char>(val & 0xFF));
+    vm->traceConstants.push_back(static_cast<unsigned char>((val >> 8) & 0xFF));
+    vm->traceConstants.push_back(static_cast<unsigned char>((val >> 16) & 0xFF));
+    vm->traceConstants.push_back(static_cast<unsigned char>((val >> 24) & 0xFF));
+}
+
+inline static void Trace_Constant(VirtualMachine* vm, const char* str)
+{
+    while (*str != 0) {
+        vm->traceConstants.push_back(static_cast<unsigned char>(*str));
+        str++;
+    }
+    vm->traceConstants.push_back(0);
+}
+
 inline static void Trace_LoadC_Int(VirtualMachine* vm, int val)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_INT);
 
     vm->trace.push_back(IR_LOAD_INT);
-    Trace_Int(vm, val);
+    Trace_Int(vm, int(vm->traceConstants.size()));
     vm->tt.curTrace->refs.push_back(node);
     vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
+    Trace_Constant(vm, val);
+}
+
+inline static void Trace_LoadC_Real(VirtualMachine* vm, real val)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_REAL);
+
+    vm->trace.push_back(IR_LOAD_REAL);
+    Trace_Int(vm, int(vm->traceConstants.size()));
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+    Trace_Constant(vm, val);
 }
 
 inline static void Trace_LoadC_String(VirtualMachine* vm, const char* str)
@@ -704,7 +765,22 @@ inline static void Trace_LoadC_String(VirtualMachine* vm, const char* str)
     TraceNode* node = Trace_CreateNode(vm, TY_STRING);
 
     vm->trace.push_back(IR_LOAD_STRING);
-    Trace_String(vm, str);
+    Trace_Int(vm, int(vm->traceConstants.size()));
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+    Trace_Constant(vm, str);
+}
+
+inline static void Trace_Conv_Int_To_Real(VirtualMachine* vm, int index)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_REAL);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() + index);
+    
+    vm->trace.push_back(IR_CONV_INT_TO_REAL);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() + index)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
     vm->tt.curTrace->refs.push_back(node);
     vm->tt.curTrace->ref++;
 
@@ -747,6 +823,17 @@ inline static void Trace_Arg_Int(VirtualMachine* vm)
     auto& node = vm->tt.curTrace->nodes[vm->tt.curTrace->nodes.size() - 1];
 
     vm->trace.push_back(TY_INT);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
+
+    SetNodeSize(vm, node);
+}
+
+inline static void Trace_Arg_Real(VirtualMachine* vm)
+{
+    auto& node = vm->tt.curTrace->nodes[vm->tt.curTrace->nodes.size() - 1];
+
+    vm->trace.push_back(TY_REAL);
     Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
     vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
 
@@ -799,6 +886,70 @@ inline static void Trace_Decrement_Int(VirtualMachine* vm)
     vm->trace.push_back(IR_DECREMENT_INT);
     Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
     vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+}
+
+inline static void Trace_Add_Real(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_REAL);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+
+    vm->trace.push_back(IR_ADD_REAL);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+}
+
+inline static void Trace_Sub_Real(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_REAL);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+
+    vm->trace.push_back(IR_SUB_REAL);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+}
+
+inline static void Trace_Mul_Real(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_REAL);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+
+    vm->trace.push_back(IR_MUL_REAL);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+}
+
+inline static void Trace_Div_Real(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_REAL);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+
+    vm->trace.push_back(IR_DIV_REAL);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
     vm->tt.curTrace->refs.push_back(node);
     vm->tt.curTrace->ref++;
 
@@ -986,6 +1137,21 @@ inline static void Trace_Cmp_Int(VirtualMachine* vm)
     SetNodeSize(vm, node);
 }
 
+inline static void Trace_Cmp_Real(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_VOID);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+
+    vm->trace.push_back(IR_CMP_REAL);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+}
+
 inline static void Trace_Cmp_String(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_VOID);
@@ -996,6 +1162,20 @@ inline static void Trace_Cmp_String(VirtualMachine* vm)
     Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
     Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
     vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+}
+
+inline static void Trace_Unary_Minus_Real(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_REAL);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+
+    vm->trace.push_back(IR_UNARY_MINUS_REAL);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 1);
+    vm->tt.curTrace->refs.push_back(node);
     vm->tt.curTrace->ref++;
 
     SetNodeSize(vm, node);
@@ -1131,8 +1311,17 @@ static void Trace_Finalize(VirtualMachine* vm)
     // Process the nodes and copy the data over to a new buffer.
     // The nodes may have be rearranged and thus the data need reordering.
 
-    vm->tt.curTrace->trace.resize(vm->trace.size());
+    const size_t size = vm->trace.size() + vm->traceConstants.size() + sizeof(int);
+    const int constantSize = int(vm->traceConstants.size());
+
+    vm->tt.curTrace->trace.resize(size);
+    
     size_t pos = 0;
+    std::memcpy(vm->tt.curTrace->trace.data(), &constantSize, sizeof(int));
+    pos += sizeof(int);
+    std::memcpy(vm->tt.curTrace->trace.data() + pos, vm->traceConstants.data(), constantSize);
+    pos += constantSize;
+
     for (TraceNode* node : vm->tt.curTrace->nodes)
     {
         if ((node->flags & TR_FLAG_LEFT_DIRTY) == TR_FLAG_LEFT_DIRTY) { UpdateLeftNode(vm, node); }
@@ -1453,7 +1642,7 @@ static void Op_Push(VirtualMachine* vm)
     {
         const real val = Read_Real(vm->program, &vm->programCounter);
         Push_Real(vm, val);
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_LoadC_Real(vm, val); }
     }
         break;
     }
@@ -1693,12 +1882,12 @@ static void Add_Real(VirtualMachine* vm, real* v1, void* v2)
     {
     case TY_REAL:
         result += *reinterpret_cast<real*>(v2);
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Add_Real(vm); }
         Push_Real(vm, result);
         break;
     case TY_INT:
         result += real(*reinterpret_cast<int*>(v2));
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Conv_Int_To_Real(vm, -2); Trace_Add_Real(vm); }
         Push_Real(vm, result);
         break;
     case TY_STRING:
@@ -1741,7 +1930,7 @@ static void Add_Int(VirtualMachine* vm, int* v1, void* v2)
     case TY_REAL:
     {
         real res = real(result) + *reinterpret_cast<real*>(v2);
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Conv_Int_To_Real(vm, -1); Trace_Add_Real(vm); }
         Push_Real(vm, res);
     }
         break;
@@ -1761,13 +1950,13 @@ static void Sub_Real(VirtualMachine* vm, real* v1, void* v2)
     {
         result = *reinterpret_cast<real*>(v2) - result;
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Sub_Real(vm); }
     }
     else if (type == TY_INT)
     {
         result = *reinterpret_cast<int*>(v2) - result;
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Conv_Int_To_Real(vm, -2); Trace_Sub_Real(vm); }
     }
     else
     {
@@ -1796,7 +1985,7 @@ static void Sub_Int(VirtualMachine* vm, int* v1, void* v2)
     {
         Push_Real(vm, *reinterpret_cast<real*>(v2) - result);
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Conv_Int_To_Real(vm, -1); Trace_Sub_Real(vm); }
     }
     else
     {
@@ -1814,13 +2003,13 @@ static void Mul_Real(VirtualMachine* vm, real* v1, void* v2)
     {
         result *= *reinterpret_cast<real*>(v2);
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Mul_Real(vm); }
     }
     else if (type == TY_INT)
     {
         result *= *reinterpret_cast<int*>(v2);
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Conv_Int_To_Real(vm, -2); Trace_Mul_Real(vm); }
     }
     else
     {
@@ -1849,7 +2038,7 @@ static void Mul_Int(VirtualMachine* vm, int* v1, void* v2)
     {
         Push_Real(vm, result * *reinterpret_cast<real*>(v2));
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Conv_Int_To_Real(vm, -1); Trace_Mul_Real(vm); }
     }
     else
     {
@@ -1867,13 +2056,13 @@ static void Div_Real(VirtualMachine* vm, real* v1, void* v2)
     {
         result = *reinterpret_cast<real*>(v2) / result;
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Div_Real(vm); }
     }
     else if (type == TY_INT)
     {
         result = *reinterpret_cast<int*>(v2) / result;
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Conv_Int_To_Real(vm, -2); Trace_Div_Real(vm); }
     }
     else
     {
@@ -1902,7 +2091,7 @@ static void Div_Int(VirtualMachine* vm, int* v1, void* v2)
     {
         Push_Real(vm, *reinterpret_cast<real*>(v2) / result);
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Conv_Int_To_Real(vm, -1); Trace_Div_Real(vm); }
     }
     else
     {
@@ -1935,7 +2124,7 @@ static void Op_Unary_Minus(VirtualMachine* vm)
     {
         Push_Real(vm, -*reinterpret_cast<real*>(var1));
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Unary_Minus_Real(vm); }
     }
     else
     {
@@ -2100,7 +2289,7 @@ static void Op_Increment(VirtualMachine* vm)
     {
         (*reinterpret_cast<real*>(value))++;
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_LoadC_Real(vm, 1.0); Trace_Add_Real(vm); }
     }
     else
     {
@@ -2133,7 +2322,7 @@ static void Op_Decrement(VirtualMachine* vm)
     {
         (*reinterpret_cast<real*>(value))--;
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_LoadC_Real(vm, 1.0); Trace_Sub_Real(vm); }
     }
     else
     {
@@ -2476,7 +2665,7 @@ static void Op_Compare(VirtualMachine* vm)
             abort();
         }
 
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_Cmp_Real(vm); }
     }
     else
     {
@@ -2962,6 +3151,11 @@ int SunScript::RestoreSnapshot(VirtualMachine* vm, const Snapshot& snap, int num
                 case TY_OBJECT:
                     vm->locals[local.index] = reinterpret_cast<void*>(val); // boxed
                     break;
+                case TY_REAL:
+                    data = vm->mm.New(sizeof(real), TY_REAL);
+                    *reinterpret_cast<real*>(data) = *reinterpret_cast<real*>(&val);
+                    vm->locals[local.index] = data;
+                    break;
                 }
 
                 ok = true;
@@ -2983,6 +3177,11 @@ int SunScript::RestoreSnapshot(VirtualMachine* vm, const Snapshot& snap, int num
                 case TY_STRING:
                 case TY_OBJECT:
                     vm->stack.push(reinterpret_cast<void*>(val)); // boxed
+                    break;
+                case TY_REAL:
+                    data = vm->mm.New(sizeof(real), TY_REAL);
+                    *reinterpret_cast<real*>(data) = *reinterpret_cast<real*>(&val);
+                    vm->stack.push(data);
                     break;
             }
         }
@@ -3042,7 +3241,7 @@ int SunScript::GetParamReal(VirtualMachine* vm, real* param)
 
         if (vm->tracing)
         {
-            Trace_Abort(vm);
+            Trace_Arg_Real(vm);
         }
 
         return VM_OK;
@@ -3110,6 +3309,12 @@ int SunScript::PushParamString(VirtualMachine* vm, const std::string& param)
 int SunScript::PushParamInt(VirtualMachine* vm, int param)
 {
     Push_Int(vm, param);
+    return VM_OK;
+}
+
+int SunScript::PushParamReal(VirtualMachine* vm, real param)
+{
+    Push_Real(vm, param);
     return VM_OK;
 }
 

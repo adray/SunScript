@@ -231,6 +231,8 @@ enum vm_sse_instructions
     VMI_SSE_UCOMISD_SRC_REG_DST_REG,
     VMI_SSE_UCOMISD_SRC_MEM_DST_REG,
 
+    VMI_SSE_XORPD_SRC_REG_DST_REG,
+
     // End of instructions
     VMI_SSE_MAX_INSTRUCTIONS
 };
@@ -345,8 +347,10 @@ static constexpr vm_sse_instruction gInstructions_SSE[VMI_SSE_MAX_INSTRUCTIONS] 
     SSE_INS(0x48, 0xF2, 0xF, 0x2A, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_CVTSI2SD_SRC_REG_DST_REG
     SSE_INS(0x48, 0xF2, 0xF, 0x2A, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_CVTSI2SD_SRC_MEM_DST_REG
 
-    SSE_INS(0x0, 0x66, 0x0, 0x2E, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A),   // VMI_SSE_UCOMISD_SRC_REG_DST_REG,
-    SSE_INS(0x0, 0x66, 0x0, 0x2E, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A),    // VMI_SSE_UCOMISD_SRC_MEM_DST_REG,
+    SSE_INS(0x0, 0x66, 0xF, 0x2E, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A),   // VMI_SSE_UCOMISD_SRC_REG_DST_REG,
+    SSE_INS(0x0, 0x66, 0xF, 0x2E, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A),    // VMI_SSE_UCOMISD_SRC_MEM_DST_REG,
+
+    SSE_INS(0x0, 0x66, 0xF, 0x57, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_XORPD_SRC_REG_DST_REG
 };
 
 //=====================
@@ -388,7 +392,6 @@ static void vm_emit_um(const vm_instruction& ins, unsigned char* program, int& c
 
     if (reg == VM_REGISTER_ESP)
     {
-        std::cout << "vm_emit_um" << std::endl;
         program[count++] = ((ins.subins & 0x7) << 3) | 0x4 | (0x0 << 6);
         program[count++] = 0x24; // SIB byte
     }
@@ -639,7 +642,7 @@ static void vm_emit_sse_brmo(const vm_sse_instruction& ins, unsigned char* progr
 static void vm_emit_sse_bmro(const vm_sse_instruction& ins, unsigned char* program, int& count, int src, int dst, int dst_offset)
 {
     assert(ins.code == CODE_BMRO);
-    assert(ins.enc == VMI_ENC_A);
+    assert(ins.enc == VMI_ENC_A || ins.enc == VMI_ENC_C);
     program[count++] = ins.ins1;
     unsigned char rex = ins.rex;
 
@@ -670,7 +673,7 @@ static void vm_emit_sse_bmro(const vm_sse_instruction& ins, unsigned char* progr
     }
 }
 
-static void vm_emit_sse_brm(const vm_sse_instruction& ins, unsigned char* program, int& count, int dst, long long addr)
+static void vm_emit_sse_brm(const vm_sse_instruction& ins, unsigned char* program, int& count, int dst, int disp32)
 {
     assert(ins.code == CODE_BMRO);
     assert(ins.enc == VMI_ENC_A);
@@ -684,11 +687,13 @@ static void vm_emit_sse_brm(const vm_sse_instruction& ins, unsigned char* progra
     program[count++] = ins.ins2;
     program[count++] = ins.ins3;
 
+    /* Relative RIP addressing (Displacement from end of instruction) */
+
     program[count++] = (((dst % 8) & 0x7) << 3) | 0x5 | (0x0 << 6);
-    program[count++] = (unsigned char)(addr & 0xff);
-    program[count++] = (unsigned char)((addr >> 8) & 0xff);
-    program[count++] = (unsigned char)((addr >> 16) & 0xff);
-    program[count++] = (unsigned char)((addr >> 24) & 0xff);
+    program[count++] = (unsigned char)(disp32 & 0xff);
+    program[count++] = (unsigned char)((disp32 >> 8) & 0xff);
+    program[count++] = (unsigned char)((disp32 >> 16) & 0xff);
+    program[count++] = (unsigned char)((disp32 >> 24) & 0xff);
 }
 
 //================
@@ -1006,7 +1011,7 @@ inline static void vm_movsd_memory_to_reg_x64(unsigned char* program, int& count
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_MOVSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
 }
 
-inline static void vm_movsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, long long addr)
+inline static void vm_movsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int addr)
 {
     vm_emit_sse_brm(gInstructions_SSE[VMI_SSE_MOVSD_SRC_MEM_DST_REG], program, count, dst, addr);
 }
@@ -1033,12 +1038,12 @@ inline static void vm_subsd_memory_to_reg_x64(unsigned char* program, int& count
 
 inline static void vm_mulsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
 {
-    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_REG_DST_REG], program, count, src, dst);
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_MULSD_SRC_REG_DST_REG], program, count, src, dst);
 }
 
 inline static void vm_mulsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
 {
-    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_MULSD_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
 }
 
 inline static void vm_divsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
@@ -1069,6 +1074,11 @@ inline static void vm_ucmpd_reg_to_reg_x64(unsigned char* program, int& count, i
 inline static void vm_ucmpd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+}
+
+inline static void vm_xorpd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
+{
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_XORPD_SRC_REG_DST_REG], program, count, src, dst);
 }
 
 //===========================
@@ -1504,6 +1514,7 @@ struct JIT_Allocation
     unsigned int type;
     unsigned int reg;
     unsigned int pos;
+    bool isSSE;
 };
 
 struct JIT_LiveValue
@@ -1546,13 +1557,14 @@ private:
     {
     public:
         Allocation();
-        void Initialize(int reg, bool enabled);
-        void Initialize(int pos);
+        void Initialize(int reg, bool enabled, bool sse);
+        void Initialize(int pos, bool sse);
         inline void SetEnabled(bool enabled) { _enabled = enabled; }
         void InsertBefore(Node* before, int ref, int start, int end);
         void InsertAfter(Node* after, int ref, int start, int end);
         void Insert(int ref, int start, int end);
 
+        inline bool IsSSE() const { return _sse; }
         inline bool Enabled() const { return _enabled; }
         inline Node* Head() const { return _head; }
         inline Node* Tail() const { return _tail; }
@@ -1564,17 +1576,18 @@ private:
         int _type;
         int _reg;
         int _pos;
+        bool _sse;
         bool _enabled;
         Node* _head;
         Node* _tail;
     };
 
     void InitializeAllocations();
-    void AllocateRegister(int ref, int start, int end);
+    void AllocateRegister(int ref, int start, int end, bool sse);
 
     std::vector<int> liveness;
+    std::vector<bool> sse;
     std::vector<Allocation> allocations;
-    std::vector<Allocation> sse;
     std::vector<JIT_Allocation> registers;
 };
 
@@ -1584,6 +1597,7 @@ JIT_Analyzer::Allocation::Allocation()
     _pos(0),
     _type(0),
     _enabled(true),
+    _sse(false),
     _head(nullptr),
     _tail(nullptr)
 {
@@ -1632,7 +1646,7 @@ void JIT_Analyzer::GetLiveValues(int index, std::vector<JIT_LiveValue>& live)
 {
     for (size_t i = 0; i < allocations.size(); i++)
     {
-        auto& al = allocations[i];
+        const auto& al = allocations[i];
         JIT_Analyzer::Node* node = al.Head();
         while (node)
         {
@@ -1647,6 +1661,7 @@ void JIT_Analyzer::GetLiveValues(int index, std::vector<JIT_LiveValue>& live)
                 value.al.pos = al.Pos();
                 value.al.type = al.Type();
                 value.al.reg = al.Register();
+                value.al.isSSE = al.IsSSE();
                 value.ref = node->ref;
                 break;
             }
@@ -1656,18 +1671,20 @@ void JIT_Analyzer::GetLiveValues(int index, std::vector<JIT_LiveValue>& live)
     }
 }
 
-void JIT_Analyzer::Allocation::Initialize(int reg, bool enabled)
+void JIT_Analyzer::Allocation::Initialize(int reg, bool enabled, bool sse)
 {
     _type = ST_REG;
     _reg = reg;
     _enabled = enabled;
+    _sse = sse;
 }
 
-void JIT_Analyzer::Allocation::Initialize(int pos)
+void JIT_Analyzer::Allocation::Initialize(int pos, bool sse)
 {
     _type = ST_STACK;
     _reg = VM_REGISTER_ESP;
     _pos = pos;
+    _sse = sse;
     _enabled = true;
 }
 
@@ -1730,11 +1747,11 @@ void JIT_Analyzer::Allocation::InsertAfter(Node* after, int ref, int start, int 
 
 void JIT_Analyzer::InitializeAllocations()
 {
-    allocations.resize(VM_REGISTER_MAX);
-    for (size_t i = 0; i < allocations.size(); i++)
+    allocations.resize(VM_REGISTER_MAX + VM_SSE_REGISTER_MAX);
+    for (size_t i = 0; i < VM_REGISTER_MAX; i++)
     {
         auto& a = allocations[i];
-        a.Initialize(int(i), true);
+        a.Initialize(int(i), true, false);
     }
     
     // Reserved registers
@@ -1756,36 +1773,37 @@ void JIT_Analyzer::InitializeAllocations()
     allocations[VM_ARG6].SetEnabled(false);
 #endif
 
-    sse.resize(VM_SSE_REGISTER_MAX);
-    for (size_t i = 0; i < sse.size(); i++)
+    for (size_t i = 0; i < VM_SSE_REGISTER_MAX; i++)
     {
-        auto& a = sse[i];
-        a.Initialize(int(i), true);
+        auto& a = allocations[i + VM_REGISTER_MAX];
+        a.Initialize(int(i), true, true);
     }
 
     // Reserved registers
 
-    sse[VM_SSE_ARG1].SetEnabled(false);
-    sse[VM_SSE_ARG2].SetEnabled(false);
-    sse[VM_SSE_ARG3].SetEnabled(false);
-    sse[VM_SSE_ARG4].SetEnabled(false);
-    sse[VM_SSE_ARG5].SetEnabled(false);
-    sse[VM_SSE_ARG6].SetEnabled(false);
+    allocations[VM_SSE_ARG1 + VM_REGISTER_MAX].SetEnabled(false);
+    allocations[VM_SSE_ARG2 + VM_REGISTER_MAX].SetEnabled(false);
+    allocations[VM_SSE_ARG3 + VM_REGISTER_MAX].SetEnabled(false);
+    allocations[VM_SSE_ARG4 + VM_REGISTER_MAX].SetEnabled(false);
+    allocations[VM_SSE_ARG5 + VM_REGISTER_MAX].SetEnabled(false);
+    allocations[VM_SSE_ARG6 + VM_REGISTER_MAX].SetEnabled(false);
 
 #if VM_MAX_SSE_ARGS == 8
-    sse[VM_SSE_ARG7].SetEnabled(false);
-    sse[VM_SSE_ARG8].SetEnabled(false);
+    allocations[VM_SSE_ARG7 + VM_REGISTER_MAX].SetEnabled(false);
+    allocations[VM_SSE_ARG8 + VM_REGISTER_MAX].SetEnabled(false);
 #endif
 }
 
-void JIT_Analyzer::AllocateRegister(int ref, int start, int end)
+void JIT_Analyzer::AllocateRegister(int ref, int start, int end, bool sse)
 {
     bool ok = false;
 
-    for (size_t i = 0; i < allocations.size(); i++)
+    size_t i = sse ? VM_REGISTER_MAX : 0;   // for SSE skip the general registers
+    for (; i < allocations.size(); i++)
     {
         auto& allocation = allocations[i];
         if (!allocation.Enabled()) { continue; }
+        if (allocation.IsSSE() != sse) { continue; }
 
         if (allocation.Head() == nullptr)
         {
@@ -1845,12 +1863,12 @@ void JIT_Analyzer::AllocateRegister(int ref, int start, int end)
         }
     }
 
-   // Allocate a new place on the stack instead
+    // Allocate a new place on the stack instead
     if (!ok)
     {
         const int size = StackSize() * 8 + 32;
         JIT_Analyzer::Allocation& allocation = allocations.emplace_back();
-        allocation.Initialize(size);
+        allocation.Initialize(size, sse);
         allocation.Insert(ref, start, end);
     }
 }
@@ -1860,10 +1878,15 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
     std::vector<Phi> phis;
     unsigned int pc = 0;
     int ref = 0;
+
+    const int constantSize = vm_jit_read_int(ir, &pc);
+    pc += constantSize;
+
     while (pc < count)
     {
         int p1 = -1;
         int p2 = -1;
+        bool isSSE = false;
 
         const int op = ir[pc++];
         switch (op)
@@ -1877,11 +1900,26 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             p1 = vm_jit_read_int(ir, &pc);
             p2 = vm_jit_read_int(ir, &pc);
             break;
+        case IR_CONV_INT_TO_REAL:
+            p1 = vm_jit_read_int(ir, &pc);
+            isSSE = true;
+            break;
+        case IR_ADD_REAL:
+        case IR_SUB_REAL:
+        case IR_MUL_REAL:
+        case IR_DIV_REAL:
+        case IR_CMP_REAL:
+            p1 = vm_jit_read_int(ir, &pc);
+            p2 = vm_jit_read_int(ir, &pc);
+            isSSE = true;
+            break;
         case IR_LOAD_INT:
+        case IR_LOAD_STRING:
             vm_jit_read_int(ir, &pc);
             break;
-        case IR_LOAD_STRING:
-            vm_jit_read_string(ir, &pc);
+        case IR_LOAD_REAL:
+            vm_jit_read_int(ir, &pc);
+            isSSE = true;
             break;
         case IR_APP_INT_STRING:
         case IR_APP_STRING_STRING:
@@ -1931,6 +1969,10 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
         case IR_UNARY_MINUS_INT:
             p1 = vm_jit_read_int(ir, &pc);
             break;
+        case IR_UNARY_MINUS_REAL:
+            p1 = vm_jit_read_int(ir, &pc);
+            isSSE = true;
+            break;
         case IR_LOOPSTART:
             break;
         case IR_PHI:
@@ -1963,12 +2005,20 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
         case IR_LOAD_INT_LOCAL:
             pc++;
             break;
+        case IR_LOAD_REAL_LOCAL:
+            pc++;
+            isSSE = true;
+            break;
+        default:
+            abort();
+            break;
         }
 
         if (p1 > -1 && p1 < ref) { liveness[p1] = std::max(liveness[p1], ref - p1); }
         if (p2 > -1 && p2 < ref) { liveness[p2] = std::max(liveness[p2], ref - p2); }
 
         liveness.push_back(0);
+        sse.push_back(isSSE);
         ref++;
     }
 
@@ -1979,11 +2029,11 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
     {
         if (liveness[i] > 0)
         {
-            AllocateRegister(i, i, liveness[i] + i);
+            AllocateRegister(i, i, liveness[i] + i, sse[i]);
         }
     }
 
-    // Write them back to an list the same size as the number of instructions
+    // Write them back to a list the same size as the number of instructions
     
     registers.resize(liveness.size());
     for (size_t j = 0; j < allocations.size(); j++)
@@ -1997,6 +2047,7 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             item.reg = al.Register();
             item.type = al.Type();
             item.pos = al.Pos();
+            item.isSSE = al.IsSSE();
             node = node->next;
         }
     }
@@ -2010,58 +2061,114 @@ void JIT_Analyzer::Dump()
     {
         std::cout << i << " " << liveness[i] << " ";
         
-        switch (registers[i].reg)
+        if (registers[i].isSSE)
         {
-        case VM_REGISTER_EAX:
-            std::cout << "EAX";
-            break;
-        case VM_REGISTER_EBX:
-            std::cout << "EBX";
-            break;
-        case VM_REGISTER_ECX:
-            std::cout << "ECX";
-            break;
-        case VM_REGISTER_EDX:
-            std::cout << "EDX";
-            break;
-        case VM_REGISTER_EDI:
-            std::cout << "EDI";
-            break;
-        case VM_REGISTER_EBP:
-            std::cout << "EBP";
-            break;
-        case VM_REGISTER_ESI:
-            std::cout << "ESI";
-            break;
-        case VM_REGISTER_ESP:
-            std::cout << "ESP";
-            break;
-        case VM_REGISTER_R8:
-            std::cout << "R8";
-            break;
-        case VM_REGISTER_R9:
-            std::cout << "R9";
-            break;
-        case VM_REGISTER_R10:
-            std::cout << "R10";
-            break;
-        case VM_REGISTER_R11:
-            std::cout << "R11";
-            break;
-        case VM_REGISTER_R12:
-            std::cout << "R12";
-            break;
-        case VM_REGISTER_R13:
-            std::cout << "R13";
-            break;
-        case VM_REGISTER_R14:
-            std::cout << "R14";
-            break;
-        case VM_REGISTER_R15:
-            std::cout << "R15";
-            break;
+            switch (registers[i].reg)
+            {
+            case VM_SSE_REGISTER_XMM0:
+                std::cout << "XMM0";
+                break;
+            case VM_SSE_REGISTER_XMM1:
+                std::cout << "XMM1";
+                break;
+            case VM_SSE_REGISTER_XMM2:
+                std::cout << "XMM2";
+                break;
+            case VM_SSE_REGISTER_XMM3:
+                std::cout << "XMM3";
+                break;
+            case VM_SSE_REGISTER_XMM4:
+                std::cout << "XMM4";
+                break;
+            case VM_SSE_REGISTER_XMM5:
+                std::cout << "XMM5";
+                break;
+            case VM_SSE_REGISTER_XMM6:
+                std::cout << "XMM6";
+                break;
+            case VM_SSE_REGISTER_XMM7:
+                std::cout << "XMM7";
+                break;
+            case VM_SSE_REGISTER_XMM8:
+                std::cout << "XMM8";
+                break;
+            case VM_SSE_REGISTER_XMM9:
+                std::cout << "XMM9";
+                break;
+            case VM_SSE_REGISTER_XMM10:
+                std::cout << "XMM10";
+                break;
+            case VM_SSE_REGISTER_XMM11:
+                std::cout << "XMM11";
+                break;
+            case VM_SSE_REGISTER_XMM12:
+                std::cout << "XMM12";
+                break;
+            case VM_SSE_REGISTER_XMM13:
+                std::cout << "XMM13";
+                break;
+            case VM_SSE_REGISTER_XMM14:
+                std::cout << "XMM14";
+                break;
+            case VM_SSE_REGISTER_XMM15:
+                std::cout << "XMM15";
+                break;
+            }
         }
-
+        else
+        {
+            switch (registers[i].reg)
+            {
+            case VM_REGISTER_EAX:
+                std::cout << "EAX";
+                break;
+            case VM_REGISTER_EBX:
+                std::cout << "EBX";
+                break;
+            case VM_REGISTER_ECX:
+                std::cout << "ECX";
+                break;
+            case VM_REGISTER_EDX:
+                std::cout << "EDX";
+                break;
+            case VM_REGISTER_EDI:
+                std::cout << "EDI";
+                break;
+            case VM_REGISTER_EBP:
+                std::cout << "EBP";
+                break;
+            case VM_REGISTER_ESI:
+                std::cout << "ESI";
+                break;
+            case VM_REGISTER_ESP:
+                std::cout << "ESP";
+                break;
+            case VM_REGISTER_R8:
+                std::cout << "R8";
+                break;
+            case VM_REGISTER_R9:
+                std::cout << "R9";
+                break;
+            case VM_REGISTER_R10:
+                std::cout << "R10";
+                break;
+            case VM_REGISTER_R11:
+                std::cout << "R11";
+                break;
+            case VM_REGISTER_R12:
+                std::cout << "R12";
+                break;
+            case VM_REGISTER_R13:
+                std::cout << "R13";
+                break;
+            case VM_REGISTER_R14:
+                std::cout << "R14";
+                break;
+            case VM_REGISTER_R15:
+                std::cout << "R15";
+                break;
+            }
+        }
         std::cout << std::endl;
     }
     std::cout << line << std::endl;
@@ -2130,6 +2237,8 @@ struct JIT_Trace
     int _size;
     int _jumpPos;
     unsigned char* _record;
+    void* _constantPage;
+    int _constantSize;
 
     int _id;
     MemoryManager _mm;
@@ -2154,7 +2263,7 @@ public:
     void* _yield_resume;
     void* _vm_resume;
     long long _stackPtr;
-long long _stackSize;
+    long long _stackSize;
 };
 
 class JIT_Manager
@@ -2226,14 +2335,19 @@ void* vm_allocate(int size)
     return VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 }
 
-void vm_initialize(void* data, unsigned char* jit, int size)
+void vm_initialize(void* data, int size)
 {
-    memcpy(data, jit, size);
     unsigned long oldProtect;
     if (VirtualProtect(data, size, PAGE_EXECUTE, &oldProtect))
     {
         FlushInstructionCache(0, data, size);
     }
+}
+
+void vm_readonly(void* data, int size)
+{
+    unsigned long oldProtect;
+    VirtualProtect(data, size, PAGE_READONLY, &oldProtect);
 }
 
 //void vm_execute(void* data)
@@ -2275,10 +2389,15 @@ void* vm_allocate(int size)
     return data;
 }
 
-void vm_initialize(void* data, unsigned char* jit, int size)
+void vm_initialize(void* data, int size)
 {
-    std::memcpy(data, jit, size);
     mprotect(data, size, PROT_EXEC | PROT_READ);
+    //cacheflush(0, size, ICACHE);
+}
+
+void vm_readonly(void* data, int size)
+{
+    mprotect(data, size, PROT_READ);
     //cacheflush(0, size, ICACHE);
 }
 
@@ -2314,6 +2433,11 @@ extern "C"
     static void vm_push_string_stub(VirtualMachine* vm, char* value)
     {
         PushParamString(vm, value);
+    }
+
+    static void vm_push_real_stub(VirtualMachine* vm, real value)
+    {
+        PushParamReal(vm, value);
     }
 
     static void* vm_call_stub(VirtualMachine* vm, MemoryManager* mm, char* name, const int numArgs)
@@ -2419,8 +2543,8 @@ static int vm_jit_read_int(unsigned char* program, unsigned int* pc)
 
 static real vm_jit_read_real(unsigned char* program, unsigned int* pc)
 {
-    real* r = reinterpret_cast<real*>(pc);
-    pc += SUN_REAL_SIZE;
+    real* r = reinterpret_cast<real*>(&program[*pc]);
+    *pc += SUN_REAL_SIZE;
     return *r;
 }
 
@@ -2804,15 +2928,15 @@ static void vm_jit_sub_real(Jitter* jitter)
     const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
     const int dst = vm_jit_decode_dst_sse(a3);
-    vm_jit_mov_sse(jitter, a1, dst);
+    vm_jit_mov_sse(jitter, a2, dst);
 
     switch (a2.type)
     {
         case ST_REG:
-            vm_subsd_reg_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg);
+            vm_subsd_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg);
             break;
         case ST_STACK:
-            vm_subsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg, a2.pos);
+            vm_subsd_memory_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg, a1.pos);
             break;
     }
 
@@ -2858,15 +2982,15 @@ static void vm_jit_div_real(Jitter* jitter)
     const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
 
     const int dst = vm_jit_decode_dst_sse(a3);
-    vm_jit_mov_sse(jitter, a1, dst);
+    vm_jit_mov_sse(jitter, a2, dst);
 
     switch (a2.type)
     {
         case ST_REG:
-            vm_divsd_reg_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg);
+            vm_divsd_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg);
             break;
         case ST_STACK:
-            vm_divsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, a2.reg, a2.pos);
+            vm_divsd_memory_to_reg_x64(jitter->jit, jitter->count, a3.reg, a1.reg, a1.pos);
             break;
     }
 
@@ -3039,27 +3163,55 @@ static void vm_jit_neg_int(Jitter* jitter)
     }
 }
 
+static void vm_jit_neg_real(Jitter* jitter)
+{
+    const int ref = vm_jit_read_int(jitter->program, jitter->pc);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    const int dst = vm_jit_decode_dst(a2);
+
+    vm_xorpd_reg_to_reg_x64(jitter->jit, jitter->count, dst, dst);
+    vm_subsd_reg_to_reg_x64(jitter->jit, jitter->count, dst, a1.reg);
+
+    if (a2.type == ST_STACK)
+    {
+        vm_movsd_reg_to_memory_x64(jitter->jit, jitter->count, a2.reg, a2.pos, dst);
+    }
+}
+
 static void vm_jit_load_real(Jitter* jitter)
 {
-    const real* val = reinterpret_cast<real*>(&jitter->program[*jitter->pc]);
-    (*jitter->pc) += SUN_REAL_SIZE;
+    const int offset = vm_jit_read_int(jitter->program, jitter->pc);
     const JIT_Allocation a = jitter->analyzer.GetAllocation(jitter->refIndex);
+    unsigned char* src = jitter->jit + jitter->count;
+    src += 8; // size of instruction
+    if (a.reg >= VM_SSE_REGISTER_XMM8)
+    {
+        /* IF we have the REX byte */
+        src++;
+    }
 
-    vm_movsd_memory_to_reg_x64(jitter->jit, jitter->count, a.reg, (long long)val); 
+    std::ptrdiff_t mem = (reinterpret_cast<unsigned char*>(jitter->_trace->_constantPage) + offset) - src;
+    assert(int(mem) < INT_MAX && int(mem) > INT_MIN);
+    vm_movsd_memory_to_reg_x64(jitter->jit, jitter->count, a.reg, int(mem));
 }
 
 static void vm_jit_load_string(Jitter* jitter)
 {
-    const char* str = (char*)&jitter->program[*jitter->pc];
-    (*jitter->pc) += static_cast<unsigned int>(strlen(str)) + 1;
+    const int offset = vm_jit_read_int(jitter->program, jitter->pc);
+    unsigned char* data = reinterpret_cast<unsigned char*>(jitter->_trace->_constantPage) + offset;
+
     const JIT_Allocation a = jitter->analyzer.GetAllocation(jitter->refIndex);
 
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, a.reg, (long long)str);
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, a.reg, (long long)data);
 }
 
 static void vm_jit_load_int(Jitter* jitter)
 {
-    const int value = vm_jit_read_int(jitter->program, jitter->pc);
+    const int offset = vm_jit_read_int(jitter->program, jitter->pc);
+    const int value = *reinterpret_cast<int*>(reinterpret_cast<unsigned char*>(jitter->_trace->_constantPage) + offset);
+
     const JIT_Allocation al = jitter->analyzer.GetAllocation(jitter->refIndex);
 
     switch (al.type)
@@ -3084,20 +3236,38 @@ static void vm_jit_call_push_stub(Jitter* jitter, VirtualMachine* vm, unsigned c
     switch (al.type)
     {
     case ST_REG:
-        vm_mov_reg_to_reg_x64(jit, count, VM_ARG2, al.reg);
+        if (al.isSSE)
+        {
+            vm_movsd_reg_to_reg_x64(jit, count, VM_SSE_ARG2, al.reg);
+        }
+        else
+        {
+            vm_mov_reg_to_reg_x64(jit, count, VM_ARG2, al.reg);
+        }
         break;
     case ST_STACK:
-        vm_mov_memory_to_reg_x64(jit, count, VM_ARG2, al.reg, al.pos);
+        if (al.isSSE)
+        {
+            vm_movsd_memory_to_reg_x64(jit, count, VM_SSE_ARG2, al.reg);
+        }
+        else
+        {
+            vm_mov_memory_to_reg_x64(jit, count, VM_ARG2, al.reg, al.pos);
+        }
         break;
     }
 
-    if (type == TY_INT)
+    switch (type)
     {
+    case TY_INT:
         vm_mov_imm_to_reg_x64(jit, count, VM_ARG4, (long long)vm_push_int_stub);
-    }
-    else if (type == TY_STRING)
-    {
+        break;
+    case TY_STRING:
         vm_mov_imm_to_reg_x64(jit, count, VM_ARG4, (long long)vm_push_string_stub);
+        break;
+    case TY_REAL:
+        vm_mov_imm_to_reg_x64(jit, count, VM_ARG4, (long long)vm_push_real_stub);
+        break;
     }
 
     // Store the VM pointer in ARG1.
@@ -3313,10 +3483,20 @@ static void vm_jit_snap(VirtualMachine* vm, Jitter* jitter)
 
 static int vm_jit_store(Jitter* jitter, JIT_LiveValue& value)
 {
-    const int dst = vm_jit_decode_dst(value.al);
-    vm_jit_mov(jitter, value.al, dst);
+    if (value.al.isSSE)
+    {
+        const int dst = vm_jit_decode_dst_sse(value.al);
+        vm_jit_mov_sse(jitter, value.al, dst);
+        vm_sub_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, 8 /*64 bit*/);
+        vm_movsd_reg_to_memory_x64(jitter->jit, jitter->count, VM_REGISTER_ESP, dst, 0);
+    }
+    else
+    {
+        const int dst = vm_jit_decode_dst(value.al);
+        vm_jit_mov(jitter, value.al, dst);
+        vm_push_reg(jitter->jit, jitter->count, dst);
+    }
 
-    vm_push_reg(jitter->jit, jitter->count, dst);
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_REGISTER_EAX, value.ref);
     vm_push_reg(jitter->jit, jitter->count, VM_REGISTER_EAX);
 
@@ -3555,6 +3735,9 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_CMP_REAL:
             vm_jit_cmp_real(jitter);
             break;
+        case IR_CONV_INT_TO_REAL:
+            vm_jit_conv_int_to_real(jitter);
+            break;
         case IR_DECREMENT_INT:
             vm_jit_dec_int(jitter);
             break;
@@ -3593,6 +3776,9 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
             break;
         case IR_UNARY_MINUS_INT:
             vm_jit_neg_int(jitter);
+            break;
+        case IR_UNARY_MINUS_REAL:
+            vm_jit_neg_real(jitter);
             break;
         case IR_YIELD:
             vm_jit_yield(vm, jitter);
@@ -3725,7 +3911,8 @@ static void vm_jit_suspend(JIT_Manager* manager)
     // Finalize
 
     manager->_co._vm_suspend = vm_allocate(count);
-    vm_initialize(manager->_co._vm_suspend, jit, count);
+    std::memcpy(manager->_co._vm_suspend, jit, count);
+    vm_initialize(manager->_co._vm_suspend, count);
 
     manager->_co._vm_resume = (unsigned char*)manager->_co._vm_suspend + resume;
 }
@@ -3760,7 +3947,8 @@ static void vm_jit_yielded(JIT_Manager* manager)
     // Finalize
 
     manager->_co._vm_yielded = vm_allocate(count);
-    vm_initialize(manager->_co._vm_yielded, jit, count);
+    std::memcpy(manager->_co._vm_yielded, jit, count);
+    vm_initialize(manager->_co._vm_yielded, count);
 
     manager->_co._yield_resume = (unsigned char*)manager->_co._vm_yielded + resumePosition;
 }
@@ -3798,7 +3986,8 @@ static void vm_jit_entry_stub(JIT_Manager* manager)
     // Finalize
 
     manager->_co._vm_stub = vm_allocate(count);
-    vm_initialize(manager->_co._vm_stub, jit, count);
+    std::memcpy(manager->_co._vm_stub, jit, count);
+    vm_initialize(manager->_co._vm_stub, count);
 }
 
 //========================
@@ -3936,6 +4125,10 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
     int op1 = 0;
     int op2 = 0;
     short offset = 0;
+    
+    const int constantSize = vm_jit_read_int(trace, &pc);
+    pc += constantSize;
+    
     while (pc < size)
     {
         std::cout << ref;
@@ -3997,6 +4190,9 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             op2 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_CMP_STRING " << op1 << " " << op2 << std::endl;
             break;
+        case IR_CONV_INT_TO_REAL:
+            std::cout << " IR_CONV_INT_TO_REAL " << vm_jit_read_int(trace, &pc) << std::endl;
+            break;
         case IR_DECREMENT_INT:
             std::cout << " IR_DECREMENT_INT " << vm_jit_read_int(trace, &pc) << std::endl;
             break;
@@ -4021,11 +4217,12 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             std::cout << " IR_LOAD_INT " << op1 << std::endl;
             break;
         case IR_LOAD_REAL:
-            op1 = vm_jit_read_real(trace, &pc);
+            op1 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_LOAD_REAL " << op1 << std::endl;
             break;
         case IR_LOAD_STRING:
-            std::cout << " IR_LOAD_STRING " << vm_jit_read_string(trace, &pc) << std::endl;
+            op1 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_LOAD_STRING " << op1 << std::endl;
             break;
         case IR_LOOPBACK:
             op1 = int(trace[pc++]);
@@ -4058,6 +4255,9 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             break;
         case IR_UNARY_MINUS_INT:
             std::cout << " IR_UNARY_MINUS_INT " << vm_jit_read_int(trace, &pc) << std::endl;
+            break;
+        case IR_UNARY_MINUS_REAL:
+            std::cout << " IR_UNARY_MINUS_REAL " << vm_jit_read_int(trace, &pc) << std::endl;
             break;
         case IR_LOOPEXIT:
             op1 = int(trace[pc++]);
@@ -4105,20 +4305,11 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
     }
 }
 
-void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* traces, int sizes, int traceId)
+void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size, int traceId)
 {
-    unsigned char* jit = new unsigned char [1024 * 3];
-    unsigned int pc = 0;
-
     std::unique_ptr<Jitter> jitter = std::make_unique<Jitter>();
-    jitter->program = traces;
-    jitter->pc = &pc;
-    jitter->size = sizes;
-    jitter->jit = jit;
-    jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
-
     jitter->_trace = new JIT_Trace();
-    jitter->_trace->_id = traceId; 
+    jitter->_trace->_id = traceId;
     jitter->_trace->_runCount = 0;
     jitter->_trace->_jumpPos = 0;
 
@@ -4129,12 +4320,28 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     //==============================
     jitter->_trace->_startTime = clock.now().time_since_epoch().count();
 
-    jitter->analyzer.Load(traces, sizes);
+    const int jitDataSize = 1024 * 3;
+    unsigned int pc = 0;
+
+    jitter->program = trace;
+    jitter->pc = &pc;
+    jitter->size = size;
+    jitter->_trace->_jit_data = vm_allocate(jitDataSize);
+    jitter->jit = reinterpret_cast<unsigned char*>(jitter->_trace->_jit_data);
+    jitter->_manager = reinterpret_cast<JIT_Manager*>(instance);
+
+    // Create readonly constant data pages.
+    const int constantSize = vm_jit_read_int(trace, &pc);
+    jitter->_trace->_constantPage = vm_allocate(constantSize);
+    std::memcpy(jitter->_trace->_constantPage, &trace[pc], constantSize);
+    vm_readonly(jitter->_trace->_constantPage, constantSize);
+    pc += constantSize;
+
+    jitter->analyzer.Load(trace, size);
+    //jitter->analyzer.Dump();
 
     vm_jit_generate_trace(vm, jitter.get());
-
-    jitter->_trace->_jit_data = vm_allocate(jitter->count);
-    vm_initialize(jitter->_trace->_jit_data, jitter->jit, jitter->count);
+    vm_initialize(jitter->_trace->_jit_data, jitter->count);
 
     /*for (auto& stub : jitter->_method->_stubs)
     {
@@ -4146,11 +4353,8 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
 
     //===============================
     jitter->_trace->_endTime = clock.now().time_since_epoch().count();
-    delete[] jit;
 
     //std::cout << "CompileTrace " << (jitter->_trace->_endTime - jitter->_trace->_startTime) << std::endl;
-
-    //jitter->analyzer.Dump();
 
     return jitter->_trace;
 }

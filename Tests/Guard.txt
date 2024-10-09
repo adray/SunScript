@@ -3,6 +3,7 @@
 var k = 17;
 var p = Rnd(10);
 var q = 0;
+var f = 9.0;
 
 if (p < 5)
 {
@@ -20,5 +21,6 @@ function magic() {
 
 var x = magic();
 x = x + q;
+f++;
 
 assert(17, k);

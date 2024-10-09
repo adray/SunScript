@@ -81,6 +81,7 @@ namespace SunScript
     constexpr unsigned char IR_SUB_REAL = 0x3a;
     constexpr unsigned char IR_MUL_REAL = 0x3b;
     constexpr unsigned char IR_DIV_REAL = 0x3c;
+    constexpr unsigned char IR_UNARY_MINUS_REAL = 0x3d;
     constexpr unsigned char IR_APP_INT_STRING = 0x47;
     constexpr unsigned char IR_APP_STRING_INT = 0x48;
     constexpr unsigned char IR_APP_STRING_STRING = 0x49;
@@ -298,6 +299,8 @@ namespace SunScript
     int PushParamString(VirtualMachine* vm, const std::string& param);
 
     int PushParamInt(VirtualMachine* vm, int param);
+
+    int PushParamReal(VirtualMachine* vm, real param);
 
     void InvokeHandler(VirtualMachine* vm, const std::string& callName, int numParams);
 
