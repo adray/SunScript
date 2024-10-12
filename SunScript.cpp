@@ -5,7 +5,6 @@
 #include <sstream>
 #include <iostream>
 #include <cstring>
-#include <format>
 #include <assert.h>
 #include <array>
 #include <cmath>
@@ -60,17 +59,19 @@ namespace SunScript
     void MemoryManager::Dump()
     {
         // Dump memory to the console.
-        std::cout << std::endl;
+        std::cout << std::hex << std::endl;
 
         for (auto& sg : _segments)
         for (int i = 0; i < sg._pos; i++)
         {
-            std::cout << std::format("0x{:x}", sg._memory[i]) << " ";
+            std::cout << int(sg._memory[i]) << " ";
             if ((i + 1) % 16 == 0)
             {
                 std::cout << std::endl;
             }
         }
+
+        std::cout << std::dec;
     }
 
     void MemoryManager::AddRef(void* mem)
@@ -288,6 +289,7 @@ namespace SunScript
         int returnAddress;
         int stackBounds;
         int localBounds;
+        bool discard;
         FunctionInfo* func;
         std::string functionName;
 
@@ -296,7 +298,8 @@ namespace SunScript
             returnAddress(0),
             stackBounds(0),
             localBounds(0),
-            func(nullptr)
+            func(nullptr),
+            discard(false)
         {}
     };
 
@@ -445,6 +448,7 @@ namespace SunScript
         std::chrono::steady_clock clock;
         int instructionsExecuted;
         int debugLine;
+        bool discard;       // whether to discard call return values
         int stackBounds;
         int localBounds;
         int callNumArgs;
@@ -1023,12 +1027,12 @@ inline static void Trace_Div_Int(VirtualMachine* vm)
 inline static void Trace_App_String_Int(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_STRING);
-    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
-    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
 
     vm->trace.push_back(IR_APP_STRING_INT);
-    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
     Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
     vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
     vm->tt.curTrace->refs.push_back(node);
     vm->tt.curTrace->ref++;
@@ -1039,12 +1043,12 @@ inline static void Trace_App_String_Int(VirtualMachine* vm)
 inline static void Trace_App_Int_String(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_STRING);
-    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
-    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
 
     vm->trace.push_back(IR_APP_INT_STRING);
-    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
     Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
     vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
     vm->tt.curTrace->refs.push_back(node);
     vm->tt.curTrace->ref++;
@@ -1055,12 +1059,44 @@ inline static void Trace_App_Int_String(VirtualMachine* vm)
 inline static void Trace_App_String_String(VirtualMachine* vm)
 {
     TraceNode* node = Trace_CreateNode(vm, TY_STRING);
-    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
-    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
 
     vm->trace.push_back(IR_APP_STRING_STRING);
-    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
     Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+}
+
+inline static void Trace_App_Real_String(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_STRING);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+
+    vm->trace.push_back(IR_APP_REAL_STRING);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
+    vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
+    vm->tt.curTrace->refs.push_back(node);
+    vm->tt.curTrace->ref++;
+
+    SetNodeSize(vm, node);
+}
+
+inline static void Trace_App_String_Real(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_CreateNode(vm, TY_STRING);
+    node->left = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2);
+    node->right = vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1);
+
+    vm->trace.push_back(IR_APP_STRING_REAL);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2)->ref);
+    Trace_Int(vm, vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1)->ref);
     vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2);
     vm->tt.curTrace->refs.push_back(node);
     vm->tt.curTrace->ref++;
@@ -1364,7 +1400,7 @@ Callstack* SunScript::GetCallStack(VirtualMachine* vm)
     size_t id = vm->frames.size();
     int pc = vm->programCounter;
     int debugLine = vm->debugLine;
-    while (id > 0)
+    while (id > 1)
     {
         auto& frame = vm->frames[id];
         tail->functionName = frame.functionName;
@@ -1648,6 +1684,24 @@ static void Op_Push(VirtualMachine* vm)
     }
 }
 
+static void Discard(VirtualMachine* vm)
+{
+    if (vm->discard && vm->stack.size() > vm->stackBounds)
+    {
+        if (vm->stack.size() == 0)
+        {
+            vm->statusCode = VM_ERROR;
+            vm->running = false;
+        }
+        else
+        {
+            vm->stack.pop();
+
+            if (vm->tracing) { Trace_Pop_Discard(vm); }
+        }
+    }
+}
+
 static void Op_Return(VirtualMachine* vm)
 {
     assert(vm->statusCode == VM_OK);
@@ -1658,6 +1712,8 @@ static void Op_Return(VirtualMachine* vm)
         vm->running = false;
         return;
     }
+
+    Discard(vm);
 
     StackFrame& frame = vm->frames[vm->frames.size() - 1];
 
@@ -1680,6 +1736,7 @@ static void Op_Return(VirtualMachine* vm)
     vm->localBounds = frame.localBounds;
     vm->frames.resize(vm->frames.size() - 1);
     vm->programCounter = frame.returnAddress;
+    vm->discard = frame.discard;
 }
 
 static void CreateStackFrame(VirtualMachine* vm, StackFrame& frame, int numArguments, int numLocals)
@@ -1695,7 +1752,7 @@ static void CreateStackFrame(VirtualMachine* vm, StackFrame& frame, int numArgum
     // TODO: we may need to reverse the stack?
 }
 
-static void Op_Call(VirtualMachine* vm)
+static void Op_Call(VirtualMachine* vm, bool discard)
 {
     assert (vm->statusCode == VM_OK);
     
@@ -1717,7 +1774,8 @@ static void Op_Call(VirtualMachine* vm)
             frame.func = &blk.info;
             CreateStackFrame(vm, frame, numArgs, int(blk.info.locals.size()));
             vm->programCounter = address;
-            
+            vm->discard = discard;
+
             if (vm->tracing)
             {
                 vm->tt.curTrace->locals.resize(vm->locals.size());
@@ -1752,6 +1810,8 @@ static void Op_Call(VirtualMachine* vm)
             // parameters can be accessed via GetParamInt() etc
             vm->statusCode = vm->handler(vm);
             vm->running = vm->statusCode == VM_OK;
+
+            Discard(vm);
         }
         else
         {
@@ -1764,22 +1824,7 @@ static void Op_Call(VirtualMachine* vm)
 
 static void Op_CallX(VirtualMachine* vm)
 {
-    Op_Call(vm);
-
-    if (vm->stack.size() > vm->stackBounds)
-    {
-        if (vm->stack.size() == 0)
-        {
-            vm->statusCode = VM_ERROR;
-            vm->running = false;
-        }
-        else
-        {
-            vm->stack.pop();
-
-            if (vm->tracing) { Trace_Pop_Discard(vm); }
-        }
-    }
+    Op_Call(vm, true);
 }
 
 static void Op_Yield(VirtualMachine* vm)
@@ -1845,7 +1890,6 @@ static void Op_Pop(VirtualMachine* vm)
 static void Add_String(VirtualMachine* vm, char* v1, void* v2)
 {
     std::stringstream result;
-    result << v1;
     char type = vm->mm.GetType(v2);
     switch (type)
     {
@@ -1855,17 +1899,19 @@ static void Add_String(VirtualMachine* vm, char* v1, void* v2)
         break;
     case TY_INT:
         result << *reinterpret_cast<int*>(v2);
-        if (vm->tracing) { Trace_App_String_Int(vm); }
+        if (vm->tracing) { Trace_App_Int_String(vm); }
         break;
     case TY_REAL:
         result << *reinterpret_cast<real*>(v2);
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_App_Real_String(vm); }
         break;
     default:
         vm->running = false;
         vm->statusCode = VM_ERROR;
         break;
     }
+
+    result << v1;
 
     if (vm->statusCode == VM_OK)
     {
@@ -1893,9 +1939,9 @@ static void Add_Real(VirtualMachine* vm, real* v1, void* v2)
     case TY_STRING:
     {
         std::stringstream ss;
+        ss << reinterpret_cast<char*>(v2);
         ss << result;
-        ss << *reinterpret_cast<char*>(v2);
-        if (vm->tracing) { Trace_Abort(vm); }
+        if (vm->tracing) { Trace_App_String_Real(vm); }
         Push_String(vm, ss.str().c_str());
     }
         break;
@@ -1921,9 +1967,9 @@ static void Add_Int(VirtualMachine* vm, int* v1, void* v2)
     case TY_STRING:
     {
         std::stringstream ss;
-        ss << result;
         ss << reinterpret_cast<char*>(v2);
-        if (vm->tracing) { Trace_App_Int_String(vm); }
+        ss << result;
+        if (vm->tracing) { Trace_App_String_Int(vm); }
         Push_String(vm, ss.str().c_str());
     }
         break;
@@ -2887,7 +2933,7 @@ static int ResumeScript2(VirtualMachine* vm)
             Op_Pop(vm);
             break;
         case OP_CALL:
-            Op_Call(vm);
+            Op_Call(vm, false);
             break;
         case OP_CALLX:
             Op_CallX(vm);
@@ -2942,7 +2988,7 @@ static int ResumeScript2(VirtualMachine* vm)
             break;
         case OP_LSCALL:
             LoopStart(vm);
-            Op_Call(vm);
+            Op_Call(vm, false);
             break;
         case OP_LSSET:
             LoopStart(vm);

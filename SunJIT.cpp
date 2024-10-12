@@ -1924,6 +1924,8 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
         case IR_APP_INT_STRING:
         case IR_APP_STRING_STRING:
         case IR_APP_STRING_INT:
+        case IR_APP_STRING_REAL:
+        case IR_APP_REAL_STRING:
             p1 = vm_jit_read_int(ir, &pc);
             p2 = vm_jit_read_int(ir, &pc);
             break;
@@ -2484,6 +2486,17 @@ extern "C"
         return data;
     }
 
+    static char* vm_append_string_real(MemoryManager* mm, char* left, real right)
+    {
+        std::stringstream ss;
+        ss << left << right;
+        std::string str = ss.str();
+        char* data = (char*)mm->New(str.length() + 1, TY_STRING);
+        std::memcpy(data, str.c_str(), str.length());
+        data[str.length()] = '\0';
+        return data;
+    }
+
     static char* vm_append_string_string(MemoryManager* mm, char* left, char* right)
     {
         std::stringstream ss;
@@ -2496,6 +2509,17 @@ extern "C"
     }
 
     static char* vm_append_int_string(MemoryManager* mm, int left, char* right)
+    {
+        std::stringstream ss;
+        ss << left << right;
+        std::string s = ss.str();
+        char* data = (char*)mm->New(s.length() + 1, TY_STRING);
+        std::memcpy(data, s.c_str(), s.length());
+        data[s.length()] = '\0';
+        return data;
+    }
+
+    static char* vm_append_real_string(MemoryManager* mm, real left, char* right)
     {
         std::stringstream ss;
         ss << left << right;
@@ -2846,7 +2870,7 @@ static void vm_jit_append_string_int(Jitter* jitter)
     
     if (a3.reg != VM_REGISTER_EAX)
     {
-        vm_mov_reg_to_reg_x64(jitter->program, jitter->count, a3.reg, VM_REGISTER_EAX);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, VM_REGISTER_EAX);
     }
 }
 
@@ -2867,7 +2891,7 @@ static void vm_jit_append_int_string(Jitter* jitter)
 
     if (a3.reg != VM_REGISTER_EAX)
     {
-        vm_mov_reg_to_reg_x64(jitter->program, jitter->count, a3.reg, VM_REGISTER_EAX);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, VM_REGISTER_EAX);
     }
 }
 
@@ -2888,7 +2912,49 @@ static void vm_jit_append_string_string(Jitter* jitter)
 
     if (a3.reg != VM_REGISTER_EAX)
     {
-        vm_mov_reg_to_reg_x64(jitter->program, jitter->count, a3.reg, VM_REGISTER_EAX);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, VM_REGISTER_EAX);
+    }
+}
+
+static void vm_jit_append_string_real(Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
+
+    vm_jit_mov(jitter, a1, VM_ARG2);
+    vm_jit_mov_sse(jitter, a2, VM_SSE_ARG3);
+
+    vm_jit_call_internal_x64(jitter, (void*)vm_append_string_real);
+
+    if (a3.reg != VM_REGISTER_EAX)
+    {
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, VM_REGISTER_EAX);
+    }
+}
+
+static void vm_jit_append_real_string(Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+    const JIT_Allocation a3 = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
+
+    vm_jit_mov_sse(jitter, a1, VM_SSE_ARG2);
+    vm_jit_mov(jitter, a2, VM_ARG3);
+
+    vm_jit_call_internal_x64(jitter, (void*)vm_append_real_string);
+
+    if (a3.reg != VM_REGISTER_EAX)
+    {
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a3.reg, VM_REGISTER_EAX);
     }
 }
 
@@ -3723,6 +3789,12 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_APP_INT_STRING:
             vm_jit_append_int_string(jitter);
             break;
+        case IR_APP_REAL_STRING:
+            vm_jit_append_real_string(jitter);
+            break;
+        case IR_APP_STRING_REAL:
+            vm_jit_append_string_real(jitter);
+            break;
         case IR_CALL:
             vm_jit_call(vm, jitter);
             break;
@@ -4161,6 +4233,16 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             op2 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_APP_STRING_STRING " << op1 << " " << op2 << std::endl;
             break;
+        case IR_APP_STRING_REAL:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_APP_STRING_REAL " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_APP_REAL_STRING:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_APP_REAL_STRING " << op1 << " " << op2 << std::endl;
+            break;
         case IR_CALL:
         case IR_YIELD:
             op1 = vm_jit_read_int(trace, &pc);
@@ -4303,6 +4385,27 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
 
         ref++;
     }
+}
+
+void SunScript::JIT_DisassembleTrace(void* data)
+{
+    assert(data);
+
+    JIT_Trace* trace = reinterpret_cast<JIT_Trace*>(data);
+    unsigned char* jit = reinterpret_cast<unsigned char*>(trace->_jit_data);
+
+    std::cout << std::hex;
+
+    for (int i = 0; i < trace->_size; i++)
+    {
+        if (i > 0 && i % 20 == 0)
+        {
+            std::cout << std::endl;
+        }
+
+        std::cout << int(jit[i]) << " ";
+    }
+    std::cout << std::dec << std::endl;
 }
 
 void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned char* trace, int size, int traceId)

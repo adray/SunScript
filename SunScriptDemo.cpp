@@ -248,7 +248,7 @@ void SunScript::Demo4()
 {
     std::stringstream stream;
     stream << "var foo = -10;" << std::endl;
-    stream << "Print(foo);" << std::endl;
+    stream << "Print(foo + \" is foo\"); " << std::endl;
     stream << "function Test1() {" << std::endl;
     stream << "    Print(\"Test\");" << std::endl;
     stream << "    return 5;" << std::endl;
@@ -259,7 +259,6 @@ void SunScript::Demo4()
     stream << "function Test3(x) {" << std::endl;
     stream << "    return x;" << std::endl;
     stream << "}" << std::endl;
-    stream << "1 + Test3(1);" << std::endl;
     stream << "var x = 2 + Test1();" << std::endl;
     stream << "Print(x);" << std::endl;
     stream << "Test2(Test1() + 5);" << std::endl;
@@ -272,7 +271,7 @@ void SunScript::Demo5()
     ss << "var x = 5;" << std::endl;
     ss << "x--;" << std::endl;
     ss << "Print(x);" << std::endl;
-    ss << "var y = (7 + x)++;" << std::endl;
+    ss << "var y = (7 + x);" << std::endl;
     ss << "Print(y);" << std::endl;
     ss << "var z = 6;" << std::endl;
     ss << "z -= 2;" << std::endl;
