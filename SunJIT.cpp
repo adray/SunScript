@@ -10,6 +10,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstring>
+#include <sstream>
 
 #ifdef WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -1747,7 +1748,7 @@ void JIT_Analyzer::Allocation::InsertAfter(Node* after, int ref, int start, int 
 
 void JIT_Analyzer::InitializeAllocations()
 {
-    allocations.resize(VM_REGISTER_MAX + VM_SSE_REGISTER_MAX);
+    allocations.resize(int(VM_REGISTER_MAX) + int(VM_SSE_REGISTER_MAX));
     for (size_t i = 0; i < VM_REGISTER_MAX; i++)
     {
         auto& a = allocations[i];
@@ -1775,22 +1776,22 @@ void JIT_Analyzer::InitializeAllocations()
 
     for (size_t i = 0; i < VM_SSE_REGISTER_MAX; i++)
     {
-        auto& a = allocations[i + VM_REGISTER_MAX];
+        auto& a = allocations[i + int(VM_REGISTER_MAX)];
         a.Initialize(int(i), true, true);
     }
 
     // Reserved registers
 
-    allocations[VM_SSE_ARG1 + VM_REGISTER_MAX].SetEnabled(false);
-    allocations[VM_SSE_ARG2 + VM_REGISTER_MAX].SetEnabled(false);
-    allocations[VM_SSE_ARG3 + VM_REGISTER_MAX].SetEnabled(false);
-    allocations[VM_SSE_ARG4 + VM_REGISTER_MAX].SetEnabled(false);
-    allocations[VM_SSE_ARG5 + VM_REGISTER_MAX].SetEnabled(false);
-    allocations[VM_SSE_ARG6 + VM_REGISTER_MAX].SetEnabled(false);
+    allocations[VM_SSE_ARG1 + int(VM_REGISTER_MAX)].SetEnabled(false);
+    allocations[VM_SSE_ARG2 + int(VM_REGISTER_MAX)].SetEnabled(false);
+    allocations[VM_SSE_ARG3 + int(VM_REGISTER_MAX)].SetEnabled(false);
+    allocations[VM_SSE_ARG4 + int(VM_REGISTER_MAX)].SetEnabled(false);
+    allocations[VM_SSE_ARG5 + int(VM_REGISTER_MAX)].SetEnabled(false);
+    allocations[VM_SSE_ARG6 + int(VM_REGISTER_MAX)].SetEnabled(false);
 
 #if VM_MAX_SSE_ARGS == 8
-    allocations[VM_SSE_ARG7 + VM_REGISTER_MAX].SetEnabled(false);
-    allocations[VM_SSE_ARG8 + VM_REGISTER_MAX].SetEnabled(false);
+    allocations[VM_SSE_ARG7 + int(VM_REGISTER_MAX)].SetEnabled(false);
+    allocations[VM_SSE_ARG8 + int(VM_REGISTER_MAX)].SetEnabled(false);
 #endif
 }
 
