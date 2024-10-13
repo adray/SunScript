@@ -133,12 +133,13 @@ void SunScript::Demo3()
     const int x = 0;
 
     SunScript::EmitLocal(_block, "x");
-    SunScript::EmitSet(_block, x, 0);
+    SunScript::EmitPush(_block, 0);
+    SunScript::EmitPop(_block, x);
     SunScript::MarkLabel(_block, &loopStart);
     SunScript::EmitPush(_block, 10);
     SunScript::EmitPushLocal(_block, x);
     SunScript::EmitCompare(_block);
-    SunScript::EmitJump(_block, JUMP_GE, &loopEnd);
+    SunScript::EmitJump(_block, JUMP_LE, &loopEnd);
     SunScript::EmitPushLocal(_block, x);
     SunScript::EmitPush(_block, 1);
     SunScript::EmitAdd(_block);
