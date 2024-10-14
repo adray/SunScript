@@ -34,4 +34,4 @@ var f10 = 6.0 / 2;
 
 var f11 = -5.0;
 
-var str = "A: " + w + " B: " + f11;
+//var str = "A: " + w + " B: " + f11;

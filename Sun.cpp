@@ -498,6 +498,46 @@ void Call::PushArg(Expr* expr)
     _args.push_back(expr);
 }
 
+//====================
+// Fold
+//====================
+
+class Fold
+{
+public:
+    Fold() :
+        _isNum(false),
+        _isInt(false)
+    {
+        _value._integer = 0;
+    }
+
+    inline void SetFold(int value) {
+        _value._integer = value;
+        _isInt = true;
+    }
+
+    inline void SetFold(real value) {
+        _value._number = value;
+        _isNum = true;
+    }
+
+    inline bool IsInteger() const { return _isInt; }
+    inline bool IsNumber() const { return _isNum; }
+    inline int Integer() const { return _value._integer; }
+    inline real Number() const { return _value._number; }
+
+private:
+    union
+    {
+        int _integer;
+        real _number;
+    } _value;
+
+    bool _isInt;
+    bool _isNum;
+};
+
 //===================
 // Expr
 //===================
@@ -519,12 +559,14 @@ public:
     inline Token Op() { return _operation; }
     inline Call* GetCall() { return _call; }
     inline void SetCall(Call* call) { _call = call; }
+    inline Fold& GetFold() { return _fold; }
 
 private:
     Expr* _left;
     Expr* _right;
     Call* _call;
     Token _operation;
+    Fold _fold;
 };
 
 //====================
@@ -716,6 +758,7 @@ private:
     bool Match(TokenType type);
     void SetError(const std::string& text);
     void EmitExpr(Expr* expr);
+    Expr* FoldExpr(Expr* expr);
     void EmitFlowGraph(FlowGraph& graph, ProgramBlock* program);
     bool EmitNode(FlowGraph& graph, FlowNode& node, ProgramBlock* program);
     void FreeExpr(Expr* expr);
@@ -925,8 +968,132 @@ void Parser::EmitFlowGraph(FlowGraph& graph, ProgramBlock* program)
     EmitLabel(program, graph.Success());
 }
 
+Expr* Parser::FoldExpr(Expr* expr)
+{
+    assert(expr);
+
+    const Token token = expr->Op();
+
+    Expr* left = expr->Left();
+    Expr* right = expr->Right();
+
+    if (token.Type() == TokenType::INTEGER)
+    {
+        expr->GetFold().SetFold(token.Integer());
+    }
+    else if (token.Type() == TokenType::NUMBER)
+    {
+        expr->GetFold().SetFold(token.Number());
+    }
+
+    if (left && right)
+    {
+        // Binary operation
+        
+        left = FoldExpr(left);
+        right = FoldExpr(right);
+
+        switch (token.Type())
+        {
+        case TokenType::PLUS:
+            if (left->GetFold().IsInteger() &&
+                right->GetFold().IsInteger())
+            {
+                const int result = left->GetFold().Integer() + right->GetFold().Integer();
+                expr->GetFold().SetFold(result);
+            }
+            else if (left->GetFold().IsNumber() &&
+                right->GetFold().IsNumber())
+            {
+                const real result = left->GetFold().Number() + right->GetFold().Number();
+                expr->GetFold().SetFold(result);
+            }
+            break;
+        case TokenType::STAR:
+            if (left->GetFold().IsInteger() &&
+                right->GetFold().IsInteger())
+            {
+                const int result = left->GetFold().Integer() * right->GetFold().Integer();
+                expr->GetFold().SetFold(result);
+            }
+            else if (left->GetFold().IsNumber() &&
+                right->GetFold().IsNumber())
+            {
+                const real result = left->GetFold().Number() * right->GetFold().Number();
+                expr->GetFold().SetFold(result);
+            }
+            break;
+        case TokenType::MINUS:
+            if (left->GetFold().IsInteger() &&
+                right->GetFold().IsInteger())
+            {
+                const int result = left->GetFold().Integer() - right->GetFold().Integer();
+                expr->GetFold().SetFold(result);
+            }
+            else if (left->GetFold().IsNumber() &&
+                right->GetFold().IsNumber())
+            {
+                const real result = left->GetFold().Number() - right->GetFold().Number();
+                expr->GetFold().SetFold(result);
+            }
+            break;
+        case TokenType::SLASH:
+            if (left->GetFold().IsInteger() &&
+                right->GetFold().IsInteger())
+            {
+                const int result = left->GetFold().Integer() / right->GetFold().Integer();
+                expr->GetFold().SetFold(result);
+            }
+            else if (left->GetFold().IsNumber() &&
+                right->GetFold().IsNumber())
+            {
+                const real result = left->GetFold().Number() / right->GetFold().Number();
+                expr->GetFold().SetFold(result);
+            }
+            break;
+        }
+    }
+    else if (right)
+    {
+        // Unary operation
+        
+        right = FoldExpr(right);
+
+        switch (token.Type())
+        {
+        case TokenType::MINUS:
+            if (right->GetFold().IsInteger())
+            {
+                expr->GetFold().SetFold(-right->GetFold().Integer());
+            }
+            else if (right->GetFold().IsNumber())
+            {
+                expr->GetFold().SetFold(-right->GetFold().Number());
+            }
+            break;
+        }
+    }
+
+    return expr;
+}
+
 void Parser::EmitExpr(Expr* expr)
 {
+    if (expr->GetFold().IsInteger())
+    {
+        auto& frame = _frames.top();
+        ProgramBlock* block = frame._block;
+        EmitPush(block, expr->GetFold().Integer());
+        return;
+    }
+    else if (expr->GetFold().IsNumber())
+    {
+        auto& frame = _frames.top();
+        ProgramBlock* block = frame._block;
+        EmitPush(block, expr->GetFold().Number());
+        return;
+    }
+
     if (expr->Left())
     {
         EmitExpr(expr->Left());
@@ -1489,7 +1656,7 @@ void Parser::ParseIfStatement()
 
             Branch br;
 
-            br.graph.BuildFlowGraph(expr);
+            br.graph.BuildFlowGraph(FoldExpr(expr));
             EmitFlowGraph(br.graph, Block());
 
             FreeExpr(expr);
@@ -1662,7 +1829,7 @@ void Parser::ParseVar()
                 {
                     const int var = int(top._vars.size());
 
-                    EmitExpr(expr);
+                    EmitExpr(FoldExpr(expr));
                     EmitLocal(Block(), identifier.String());
                     EmitPop(Block(), var);
                     FreeExpr(expr);
