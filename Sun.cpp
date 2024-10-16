@@ -75,7 +75,11 @@ public:
     inline TokenType Type() const { return _type; }
     inline int Line() const { return _line; }
     inline std::string String() const { return _value; }
+#if USE_SUN_FLOAT
+    inline real Number() const { return std::strtof(_value.c_str(), 0); }
+#else
     inline real Number() const { return std::strtod(_value.c_str(), 0); }
+#endif
     inline int Integer() const { return std::strtol(_value.c_str(), 0, 10); }
 
 private:
@@ -2016,7 +2020,7 @@ void Parser::ParseFor()
     }
     else
     {
-        SetError("Unexcepted token.");
+        SetError("Unexpected token.");
     }
 }
 

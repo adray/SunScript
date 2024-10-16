@@ -30,6 +30,7 @@ set (SUN_TESTS
 project ("Sun")
 
 add_compile_definitions(_SUN_EXECUTABLE_)
+#add_compile_definitions(USE_SUN_FLOAT)
 
 # Add source to this project's executable.
 add_executable(Sun ${SUN_SOURCES} ${SUN_TESTS})

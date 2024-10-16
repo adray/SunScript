@@ -110,7 +110,7 @@ static int Handler(VirtualMachine* vm)
     }
     else if (callName == "DebugLog")
     {
-        double param;
+        real param;
         std::string str;
         if (VM_OK == GetParamReal(vm, &param))
         {

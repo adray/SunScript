@@ -234,6 +234,30 @@ enum vm_sse_instructions
 
     VMI_SSE_XORPD_SRC_REG_DST_REG,
 
+    VMI_SSE_MOVSS_SRC_REG_DST_REG,
+    VMI_SSE_MOVSS_SRC_REG_DST_MEM,
+    VMI_SSE_MOVSS_SRC_MEM_DST_REG,
+
+    VMI_SSE_ADDSS_SRC_REG_DST_REG,
+    VMI_SSE_ADDSS_SRC_MEM_DST_REG,
+
+    VMI_SSE_SUBSS_SRC_REG_DST_REG,
+    VMI_SSE_SUBSS_SRC_MEM_DST_REG,
+
+    VMI_SSE_MULSS_SRC_REG_DST_REG,
+    VMI_SSE_MULSS_SRC_MEM_DST_REG,
+
+    VMI_SSE_DIVSS_SRC_REG_DST_REG,
+    VMI_SSE_DIVSS_SRC_MEM_DST_REG,
+
+    VMI_SSE_CVTSI2SS_SRC_REG_DST_REG,
+    VMI_SSE_CVTSI2SS_SRC_MEM_DST_REG,
+
+    VMI_SSE_UCOMISS_SRC_REG_DST_REG,
+    VMI_SSE_UCOMISS_SRC_MEM_DST_REG,
+
+    VMI_SSE_XORPS_SRC_REG_DST_REG,
+
     // End of instructions
     VMI_SSE_MAX_INSTRUCTIONS
 };
@@ -328,7 +352,7 @@ static constexpr vm_instruction gInstructions[VMI_MAX_INSTRUCTIONS] = {
 static constexpr vm_sse_instruction gInstructions_SSE[VMI_SSE_MAX_INSTRUCTIONS] = {
     SSE_INS(0x0, 0xF2, 0xF, 0x10, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_MOVSD_SRC_REG_DST_REG
     SSE_INS(0x0, 0xF2, 0xF, 0x11, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_C), // VMI_SSE_MOVSD_SRC_REG_DST_MEM
-    SSE_INS(0x0, 0xF2, 0xF, 0x10, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A), // VMI_SSE_MOVSD_SRC_MEM_DST_REG
+    SSE_INS(0x0, 0xF2, 0xF, 0x10, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_A), // VMI_SSE_MOVSD_SRC_MEM_DST_REG
 
     SSE_INS(0x0, 0x66, 0xF, 0x58, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_ADDPD_SRC_REG_DST_REG
 
@@ -352,6 +376,31 @@ static constexpr vm_sse_instruction gInstructions_SSE[VMI_SSE_MAX_INSTRUCTIONS] 
     SSE_INS(0x0, 0x66, 0xF, 0x2E, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_A),    // VMI_SSE_UCOMISD_SRC_MEM_DST_REG,
 
     SSE_INS(0x0, 0x66, 0xF, 0x57, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_XORPD_SRC_REG_DST_REG
+
+    SSE_INS(0x0, 0xF3, 0xF, 0x10, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_MOVSS_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF3, 0xF, 0x11, VM_INSTRUCTION_BINARY, CODE_BMRO, VMI_ENC_C), // VMI_SSE_MOVSS_SRC_REG_DST_MEM
+    SSE_INS(0x0, 0xF3, 0xF, 0x10, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_A), // VMI_SSE_MOVSS_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0xF3, 0xF, 0x58, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_ADDSS_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF3, 0xF, 0x58, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_A), // VMI_SSE_ADDSS_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0xF3, 0xF, 0x5C, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_SUBSS_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF3, 0xF, 0x5C, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_A), // VMI_SSE_SUBSS_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0xF3, 0xF, 0x59, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_MULSS_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF3, 0xF, 0x59, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_A), // VMI_SSE_MULSS_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0xF3, 0xF, 0x5E, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_DIVSS_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF3, 0xF, 0x5E, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_A), // VMI_SSE_DIVSS_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, 0xF3, 0xF, 0x2A, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_CVTSI2SS_SRC_REG_DST_REG
+    SSE_INS(0x0, 0xF3, 0xF, 0x2A, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_A), // VMI_SSE_CVTSI2SS_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, VMI_UNUSED, 0xF, 0x2E, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_UCOMISS_SRC_REG_DST_REG
+    SSE_INS(0x0, VMI_UNUSED, 0xF, 0x2E, VM_INSTRUCTION_BINARY, CODE_BRMO, VMI_ENC_A), // VMI_SSE_UCOMISS_SRC_MEM_DST_REG
+
+    SSE_INS(0x0, VMI_UNUSED, 0xF, 0x57, VM_INSTRUCTION_BINARY, CODE_BRR, VMI_ENC_A), // VMI_SSE_XORPS_SRC_REG_DST_REG
+
 };
 
 //=====================
@@ -588,7 +637,9 @@ static void vm_emit_ui(const vm_instruction& ins, unsigned char* program, int& c
 static void vm_emit_sse_brr(const vm_sse_instruction& ins, unsigned char* program, int& count, int src, int dst)
 {
     assert(ins.code == CODE_BRR);
-    program[count++] = ins.ins1;
+    if (ins.ins1 != VMI_UNUSED) {
+        program[count++] = ins.ins1;
+    }
     unsigned char rex = ins.rex;
     if (dst >= VM_SSE_REGISTER_XMM8) { rex |= 0x1 | (1 << 6); }
     if (src >= VM_SSE_REGISTER_XMM8) { rex |= 0x4 | (1 << 6); }
@@ -611,7 +662,9 @@ static void vm_emit_sse_brmo(const vm_sse_instruction& ins, unsigned char* progr
 {
     assert(ins.code == CODE_BRMO);
     assert(ins.enc == VMI_ENC_A);
-    program[count++] = ins.ins1;
+    if (ins.ins1 != VMI_UNUSED) {
+        program[count++] = ins.ins1;
+    }
     unsigned char rex = ins.rex;
     if (src >= VM_SSE_REGISTER_XMM8) { rex |= 0x1 | (1 << 6); }
     if (dst >= VM_REGISTER_R8) { rex |= 0x4 | (1 << 6); }
@@ -644,7 +697,9 @@ static void vm_emit_sse_bmro(const vm_sse_instruction& ins, unsigned char* progr
 {
     assert(ins.code == CODE_BMRO);
     assert(ins.enc == VMI_ENC_A || ins.enc == VMI_ENC_C);
-    program[count++] = ins.ins1;
+    if (ins.ins1 != VMI_UNUSED) {
+        program[count++] = ins.ins1;
+    }
     unsigned char rex = ins.rex;
 
     if (dst >= VM_SSE_REGISTER_XMM8) { rex |= 0x1 | (1 << 6); }
@@ -676,9 +731,11 @@ static void vm_emit_sse_bmro(const vm_sse_instruction& ins, unsigned char* progr
 
 static void vm_emit_sse_brm(const vm_sse_instruction& ins, unsigned char* program, int& count, int dst, int disp32)
 {
-    assert(ins.code == CODE_BMRO);
+    assert(ins.code == CODE_BRMO);
     assert(ins.enc == VMI_ENC_A);
-    program[count++] = ins.ins1;
+    if (ins.ins1 != VMI_UNUSED) {
+        program[count++] = ins.ins1;
+    }
     unsigned char rex = ins.rex;
 
     if (dst >= VM_SSE_REGISTER_XMM8) { rex |= 0x4 | (1 << 6); }
@@ -999,87 +1056,155 @@ inline static void vm_neg_reg_x64(unsigned char* program, int& count, int reg)
 
 inline static void vm_movsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_MOVSS_SRC_REG_DST_REG], program, count, src, dst);
+#else
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_MOVSD_SRC_REG_DST_REG], program, count, src, dst);
+#endif
 }
 
 inline static void vm_movsd_reg_to_memory_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_bmro(gInstructions_SSE[VMI_SSE_MOVSS_SRC_REG_DST_MEM], program, count, dst, src, dst_offset);
+#else
     vm_emit_sse_bmro(gInstructions_SSE[VMI_SSE_MOVSD_SRC_REG_DST_MEM], program, count, dst, src, dst_offset);
+#endif
 }
 
 inline static void vm_movsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_MOVSS_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#else
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_MOVSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#endif
 }
 
 inline static void vm_movsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int addr)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brm(gInstructions_SSE[VMI_SSE_MOVSS_SRC_MEM_DST_REG], program, count, dst, addr);
+#else
     vm_emit_sse_brm(gInstructions_SSE[VMI_SSE_MOVSD_SRC_MEM_DST_REG], program, count, dst, addr);
+#endif
 }
 
 inline static void vm_addsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_ADDSS_SRC_REG_DST_REG], program, count, src, dst);
+#else
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_ADDSD_SRC_REG_DST_REG], program, count, src, dst);
+#endif
 }
 
 inline static void vm_addsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_ADDSS_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#else
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_ADDSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#endif
 }
 
 inline static void vm_subsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_SUBSS_SRC_REG_DST_REG], program, count, src, dst);
+#else
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_SUBSD_SRC_REG_DST_REG], program, count, src, dst);
+#endif
 }
 
 inline static void vm_subsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_SUBSS_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#else
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_SUBSD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#endif
 }
 
 inline static void vm_mulsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_MULSS_SRC_REG_DST_REG], program, count, src, dst);
+#else
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_MULSD_SRC_REG_DST_REG], program, count, src, dst);
+#endif
 }
 
 inline static void vm_mulsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_MULSS_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
+#else
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_MULSD_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
+#endif
 }
 
 inline static void vm_divsd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_DIVSS_SRC_REG_DST_REG], program, count, src, dst);
+#else
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_DIVSD_SRC_REG_DST_REG], program, count, src, dst);
+#endif
 }
 
 inline static void vm_divsd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_DIVSS_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
+#else
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_DIVSD_SRC_MEM_DST_REG], program, count, src, dst, dst_offset);
+#endif
 }
 
 inline static void vm_cvtitod_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_CVTSI2SS_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#else
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_CVTSI2SD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#endif
 }
 
 inline static void vm_cvtitod_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_CVTSI2SS_SRC_REG_DST_REG], program, count, src, dst);
+#else
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_CVTSI2SD_SRC_REG_DST_REG], program, count, src, dst);
+#endif
 }
 
 inline static void vm_ucmpd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_UCOMISS_SRC_REG_DST_REG], program, count, src, dst);
+#else
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_REG_DST_REG], program, count, src, dst);
+#endif
 }
 
 inline static void vm_ucmpd_memory_to_reg_x64(unsigned char* program, int& count, int dst, int src, int src_offset)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_UCOMISS_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#else
     vm_emit_sse_brmo(gInstructions_SSE[VMI_SSE_UCOMISD_SRC_MEM_DST_REG], program, count, src, dst, src_offset);
+#endif
 }
 
 inline static void vm_xorpd_reg_to_reg_x64(unsigned char* program, int& count, int dst, int src)
 {
+#ifdef USE_SUN_FLOAT
+    vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_XORPS_SRC_REG_DST_REG], program, count, src, dst);
+#else
     vm_emit_sse_brr(gInstructions_SSE[VMI_SSE_XORPD_SRC_REG_DST_REG], program, count, src, dst);
+#endif
 }
 
 //===========================
