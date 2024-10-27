@@ -1140,7 +1140,7 @@ inline static void Trace_LoopStart(VirtualMachine* vm)
 
 inline static void Trace_LoopBack(VirtualMachine* vm, int jump, short offset)
 {
-    TraceNode* node = Trace_Instruction(vm, TY_VOID, { .id = IR_LOOPBACK, .offset = offset, .jump = unsigned char(jump) });
+    TraceNode* node = Trace_Instruction(vm, TY_VOID, { .id = IR_LOOPBACK, .offset = offset, .jump = static_cast<unsigned char>(jump) });
     vm->tt.curTrace->ref++;
 }
 
@@ -1153,7 +1153,7 @@ inline static void Trace_PromoteGuard(VirtualMachine* vm, TraceNode* node, Trace
 
 inline static void Trace_Guard(VirtualMachine* vm, int jump)
 {
-    TraceNode* node = Trace_Instruction(vm, TY_VOID, { .id = IR_GUARD, .jump = unsigned char(jump) });
+    TraceNode* node = Trace_Instruction(vm, TY_VOID, { .id = IR_GUARD, .jump = static_cast<unsigned char>(jump) });
     vm->tt.curTrace->ref++;
 }
 
