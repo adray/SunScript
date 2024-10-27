@@ -166,8 +166,11 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     }
 
     unsigned char* program;
+    unsigned char* debug;
     int programSize;
-    CompileFile(test->_filename, &program, &programSize);
+    int debugSize;
+    std::string compile;
+    CompileFile(test->_filename, &program, &debug, &programSize, &debugSize, &compile);
 
     std::chrono::steady_clock clock;
     auto startTime = clock.now().time_since_epoch();
@@ -175,7 +178,7 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     const int runCount = 10000;
     if (program)
     {
-        LoadProgram(vm, program, programSize);
+        LoadProgram(vm, program, debug, programSize);
         for (int i = 0; i < runCount; i++)
         {
             int errorCode = RunScript(vm);
@@ -246,7 +249,7 @@ static void PrintCaps()
     std::cout << std::endl;
 }
 
-void SunScript::RunTestSuite(const std::string& directory, int opts)
+void SunScript::RunTestSuite(const std::string& path, int opts)
 {
     PrintCaps();
 
@@ -254,15 +257,22 @@ void SunScript::RunTestSuite(const std::string& directory, int opts)
 
     SunTestSuite* suite = new SunTestSuite();
     suite->EnableDumpTrace(opts & OPT_DUMPTRACE);
-    std::filesystem::directory_iterator it(directory);
-    for (auto& entry : it)
+    if (std::filesystem::is_directory(path))
     {
-        if (entry.is_regular_file() &&
-            entry.path().has_extension() &&
-            entry.path().extension() == ".txt")
+        std::filesystem::directory_iterator it(path);
+        for (auto& entry : it)
         {
-            suite->AddTest(entry.path().string());
+            if (entry.is_regular_file() &&
+                entry.path().has_extension() &&
+                entry.path().extension() == ".txt")
+            {
+                suite->AddTest(entry.path().string());
+            }
         }
+    }
+    else
+    {
+        suite->AddTest(path);
     }
 
     suite->RunTests();

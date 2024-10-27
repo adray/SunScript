@@ -6,5 +6,5 @@
 
 namespace SunScript
 {
-    void RunTestSuite(const std::string& directory, int opts);
+    void RunTestSuite(const std::string& path, int opts);
 }

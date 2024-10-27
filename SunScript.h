@@ -68,6 +68,9 @@ namespace SunScript
     constexpr unsigned char IR_LOAD_REAL_LOCAL = 0x12;
     constexpr unsigned char IR_CALL = 0x20;
     constexpr unsigned char IR_YIELD = 0x21;
+    constexpr unsigned char IR_INT_ARG = 0x25;
+    constexpr unsigned char IR_STRING_ARG = 0x26;
+    constexpr unsigned char IR_REAL_ARG = 0x27;
     constexpr unsigned char IR_INCREMENT_INT = 0x30;
     constexpr unsigned char IR_DECREMENT_INT = 0x31;
     constexpr unsigned char IR_INCREMENT_REAL = 0x32;

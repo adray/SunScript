@@ -2060,13 +2060,15 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             vm_jit_read_int(ir, &pc);
             {
                 const int numArgs = ir[pc++];
-                for (int i = 0; i < numArgs; i++)
-                {
-                    pc++; // skip type
-                    const int arg = vm_jit_read_int(ir, &pc);
-                    liveness[arg] = std::max(liveness[arg], ref - arg);
-                }
             }
+            break;
+        case IR_INT_ARG:
+        case IR_STRING_ARG:
+        case IR_REAL_ARG:
+        {
+            const int arg = vm_jit_read_int(ir, &pc);
+            liveness[arg] = std::max(liveness[arg], ref - arg);
+        }
             break;
         case IR_DECREMENT_INT:
         case IR_INCREMENT_INT:
@@ -3451,13 +3453,13 @@ static void vm_jit_call_push_stub(Jitter* jitter, VirtualMachine* vm, unsigned c
 
     switch (type)
     {
-    case TY_INT:
+    case IR_INT_ARG:
         vm_mov_imm_to_reg_x64(jit, count, VM_ARG4, (long long)vm_push_int_stub);
         break;
-    case TY_STRING:
+    case IR_STRING_ARG:
         vm_mov_imm_to_reg_x64(jit, count, VM_ARG4, (long long)vm_push_string_stub);
         break;
-    case TY_REAL:
+    case IR_REAL_ARG:
         vm_mov_imm_to_reg_x64(jit, count, VM_ARG4, (long long)vm_push_real_stub);
         break;
     }
@@ -3522,6 +3524,8 @@ static void vm_jit_call(VirtualMachine* vm, Jitter* jitter)
         }
         break;
     }
+
+    jitter->refIndex += numParams;
 }
 
 static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
@@ -3545,6 +3549,8 @@ static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
     vm_jit_call_internal_x64(jitter, jitter->_manager->_co._vm_suspend);
 
     // Upon resuming we need to copy the stack back from the heap and the jump back to the resumption point.
+
+    jitter->refIndex += numParams;
 }
 
 static void vm_jit_unbox(VirtualMachine* vm, Jitter* jitter)
@@ -3592,10 +3598,25 @@ static void vm_jit_unbox(VirtualMachine* vm, Jitter* jitter)
             vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, dst);
             break;
         case ST_REG:
-            vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
+            //vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
             break;
         }
 
+        break;
+    case TY_REAL:
+        dst = vm_jit_decode_dst(al);
+        vm_jit_mov(jitter, al, VM_REGISTER_EAX);
+        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_REGISTER_EAX, 0); // de-reference
+
+        switch (al.type)
+        {
+        case ST_STACK:
+            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, dst);
+            break;
+        case ST_REG:
+            //vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
+            break;
+        }
         break;
     }
 }
@@ -4373,15 +4394,16 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
         case IR_YIELD:
             op1 = vm_jit_read_int(trace, &pc);
             op2 = trace[pc++]; // num args
-            std::cout << " IR_CALL " << op1 << " " << op2;
-            {
-                for (int i = 0; i < op2; i++)
-                {
-                    pc++; // TYPE
-                    std::cout << " " << vm_jit_read_int(trace, &pc);
-                }
-            }
-            std::cout << std::endl;
+            std::cout << " IR_CALL " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_STRING_ARG:
+            std::cout << " IR_STRING_ARG " << vm_jit_read_int(trace, &pc) << std::endl;
+            break;
+        case IR_REAL_ARG:
+            std::cout << " IR_REAL_ARG " << vm_jit_read_int(trace, &pc) << std::endl;
+            break;
+        case IR_INT_ARG:
+            std::cout << " IR_INT_ARG " << vm_jit_read_int(trace, &pc) << std::endl;
             break;
         case IR_CMP_INT:
             op1 = vm_jit_read_int(trace, &pc);

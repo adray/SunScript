@@ -24,6 +24,7 @@ set (SUN_TESTS
     "Tests/Guard.txt"
     "Tests/LoopTest.txt"
     "Tests/NestedLoop.txt"
+    "Tests/Phi.txt"
     "Tests/Spill.txt"
 )
 

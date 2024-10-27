@@ -1,0 +1,13 @@
+
+function body(p) {
+    Rnd(p);
+}
+
+var p = 123;
+var y = 15;
+while (y > 0) {
+    y--;
+    if (y > 0){
+        body(p);
+    }
+}
