@@ -102,6 +102,9 @@ namespace SunScript
     constexpr unsigned char IR_UNBOX = 0x65;
     constexpr unsigned char IR_CONV_INT_TO_REAL = 0x70;
 
+    constexpr int BUILD_FLAG_SINGLE = 0x1;
+    constexpr int BUILD_FLAG_DOUBLE = 0x2;
+
 #ifdef USE_SUN_FLOAT
     typedef float real;
     constexpr int SUN_REAL_SIZE = 4;
@@ -394,4 +397,6 @@ namespace SunScript
     void EmitDone(ProgramBlock* program);
 
     void EmitDebug(ProgramBlock* program, int line);
+
+    void EmitBuildFlags(Program* program, int flags);
 }

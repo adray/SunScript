@@ -2137,6 +2137,12 @@ void Parser::Parse()
         EmitDone(Block());
         EmitProgramBlock(_program, Block());
 
+#if USE_SUN_FLOAT
+        EmitBuildFlags(_program, BUILD_FLAG_SINGLE);
+#else
+        EmitBuildFlags(_program, BUILD_FLAG_DOUBLE);
+#endif
+
         for (auto& func : _functions)
         {
             if (func.second.blk)

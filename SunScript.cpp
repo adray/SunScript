@@ -459,6 +459,7 @@ namespace SunScript
         unsigned int programInstruction;    // the position of the start of the current instruction
         unsigned int programOffset;         // offset in program data where the program starts
         int* debugLines;
+        int buildFlags;
         bool running;
         bool tracing;
         bool tracingPaused;
@@ -516,6 +517,7 @@ namespace SunScript
         std::vector<ProgramBlock*> blocks;
         int numFunctions;
         int numLines;
+        int buildFlags;
     };
 }
 
@@ -2694,6 +2696,7 @@ static void ScanFunctions(VirtualMachine* vm, unsigned char* program)
 {
     const int numBlocks = Read_Int(program, &vm->programCounter);
     const int numEntries = Read_Int(program, &vm->programCounter);
+    vm->buildFlags = Read_Int(program, &vm->programCounter);
     for (int i = 0; i < numBlocks; i++)
     {
         const int functionOffset = Read_Int(program, &vm->programCounter);
@@ -2848,9 +2851,27 @@ static void ExecuteTrace(VirtualMachine* vm)
     }
 }
 
+static void CheckBuildFlags(VirtualMachine* vm)
+{
+#ifdef USE_SUN_FLOAT
+    if ((vm->buildFlags & BUILD_FLAG_SINGLE) != BUILD_FLAG_SINGLE)
+    {
+        vm->statusCode = VM_ERROR;
+        vm->running = false;
+    }
+#else
+    if ((vm->buildFlags & BUILD_FLAG_DOUBLE) != BUILD_FLAG_DOUBLE)
+    {
+        vm->statusCode = VM_ERROR;
+        vm->running = false;
+    }
+#endif
+}
+
 static int ResumeScript2(VirtualMachine* vm)
 {
     StartVM(vm);
+    CheckBuildFlags(vm);
 
     while (vm->running)
     {
@@ -3362,6 +3383,7 @@ Program* SunScript::CreateProgram()
     Program* prog = new Program();
     prog->numFunctions = 0;
     prog->numLines = 0;
+    prog->buildFlags = 0;
     return prog;
 }
 
@@ -3393,12 +3415,15 @@ void SunScript::ResetProgram(Program* program)
     program->data.clear();
     program->functions.clear();
     program->debug.clear();
+    program->blocks.clear();
     program->numLines = 0;
+    program->numFunctions = 0;
+    program->buildFlags = 0;
 }
 
 int SunScript::GetProgram(Program* program, unsigned char** programData)
 {
-    const int size = int(program->data.size() + program->functions.size() + program->entries.size() + sizeof(std::int32_t) * 2);
+    const int size = int(program->data.size() + program->functions.size() + program->entries.size() + sizeof(std::int32_t) * 3);
     *programData = new unsigned char[size];
 
     const size_t numBlocks = program->blocks.size();
@@ -3413,9 +3438,17 @@ int SunScript::GetProgram(Program* program, unsigned char** programData)
     (*programData)[6] = (unsigned char)((numFunctions >> 16) & 0xFF);
     (*programData)[7] = (unsigned char)((numFunctions >> 24) & 0xFF);
 
-    std::memcpy(*programData + sizeof(std::int32_t) * 2, program->functions.data(), program->functions.size());
-    std::memcpy(*programData + program->functions.size() + sizeof(std::int32_t) * 2, program->entries.data(), program->entries.size());
-    std::memcpy(*programData + program->functions.size() + program->entries.size() + sizeof(std::int32_t) * 2, program->data.data(), program->data.size());
+    const int buildFlags = program->buildFlags;
+    (*programData)[8] = (unsigned char)(buildFlags & 0xFF);
+    (*programData)[9] = (unsigned char)((buildFlags >> 8) & 0xFF);
+    (*programData)[10] = (unsigned char)((buildFlags >> 16) & 0xFF);
+    (*programData)[11] = (unsigned char)((buildFlags >> 24) & 0xFF);
+
+    const int offset = sizeof(std::int32_t) * 3;
+
+    std::memcpy(*programData + offset, program->functions.data(), program->functions.size());
+    std::memcpy(*programData + program->functions.size() + offset, program->entries.data(), program->entries.size());
+    std::memcpy(*programData + program->functions.size() + program->entries.size() + offset, program->data.data(), program->data.size());
     return size;
 }
 
@@ -3444,6 +3477,18 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
     ScanFunctions(vm, programData);
     ScanDebugData(vm, debugData);
     vm->running = true;
+
+    ss << "======================" << std::endl;
+    ss << "Build" << std::endl;
+    ss << "======================" << std::endl;
+    if ((vm->buildFlags & BUILD_FLAG_DOUBLE) == BUILD_FLAG_DOUBLE)
+    {
+        ss << "BUILD_FLAG_DOUBLE" << std::endl;
+    }
+    else if ((vm->buildFlags & BUILD_FLAG_SINGLE) == BUILD_FLAG_SINGLE)
+    {
+        ss << "BUILD_FLAG_SINGLE" << std::endl;
+    }
 
     ss << "======================" << std::endl;
     ss << "Functions" << std::endl;
@@ -3821,4 +3866,9 @@ void SunScript::EmitDebug(ProgramBlock* program, int line)
     EmitInt(program->debug, int(program->data.size()));
     EmitInt(program->debug, line);
     program->numLines++;
+}
+
+void SunScript::EmitBuildFlags(Program* program, int flags)
+{
+    program->buildFlags |= flags;
 }
