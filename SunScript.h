@@ -100,6 +100,7 @@ namespace SunScript
     constexpr unsigned char IR_PHI = 0x63;
     constexpr unsigned char IR_SNAP = 0x64;
     constexpr unsigned char IR_UNBOX = 0x65;
+    constexpr unsigned char IR_NOP = 0x66;
     constexpr unsigned char IR_CONV_INT_TO_REAL = 0x70;
 
     constexpr int BUILD_FLAG_SINGLE = 0x1;
@@ -233,6 +234,11 @@ namespace SunScript
     * Shuts down an instance of a Virtual Machine.
     */
     void ShutdownVirtualMachine(VirtualMachine* vm);
+
+    /*
+    * Sets the optimization level of the JIT compilier.
+    */
+    void SetOptimizationLevel(VirtualMachine* vm, int level);
 
     /*
     * Sets a handler function which will handle functions

@@ -2127,6 +2127,8 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
                 }
             }
             break;
+        case IR_NOP:
+            break;
         case IR_UNBOX:
             p1 = vm_jit_read_int(ir, &pc);
             pc++; // type
@@ -4011,6 +4013,9 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_UNBOX:
             vm_jit_unbox(vm, jitter);
             break;
+        case IR_NOP:
+            // Nothing
+            break;
         case IR_LOAD_INT_LOCAL:
             vm_jit_load_int_local(vm, jitter);
             break;
@@ -4444,7 +4449,7 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             break;
         case IR_LOAD_INT:
             op1 = vm_jit_read_int(trace, &pc);
-            std::cout << " IR_LOAD_INT " << op1 << std::endl;
+            std::cout << " IR_LOAD_INT " << op1 << " (" << *reinterpret_cast<int*>(&trace[op1 + 4]) << ")" << std::endl;
             break;
         case IR_LOAD_REAL:
             op1 = vm_jit_read_int(trace, &pc);
@@ -4472,6 +4477,9 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             op1 = vm_jit_read_int(trace, &pc);
             op2 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_MUL_REAL " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_NOP:
+            std::cout << " IR_NOP" << std::endl;
             break;
         case IR_SUB_INT:
             op1 = vm_jit_read_int(trace, &pc);

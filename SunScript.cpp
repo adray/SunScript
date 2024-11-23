@@ -2,6 +2,7 @@
 #include <fstream>
 #include <stack>
 #include <unordered_map>
+#include <unordered_set>
 #include <sstream>
 #include <iostream>
 #include <cstring>
@@ -452,6 +453,55 @@ namespace SunScript
         {}
     };
 
+    class IRBuffer
+    {
+    public:
+        static const int BUFFER_SIZE = 64;
+
+        IRBuffer();
+        void write(const InsData& data, int left, int right);
+        void at(int ref, InsData* data, int* left, int* right);
+        inline bool empty() { return _head == _tail; }
+        inline bool full() { return _head - _tail >= BUFFER_SIZE; }
+        inline bool exists(int pos) { return pos >= _tail && pos < _head; }
+        void read(InsData* data, int* left, int* right);
+
+    private:
+        int _head;
+        int _tail;
+        InsData _buffer[BUFFER_SIZE];
+        int _buffer_left[BUFFER_SIZE];
+        int _buffer_right[BUFFER_SIZE];
+    };
+
+    struct OptFilter
+    {
+        bool _enabled;
+        IRBuffer _input;
+        IRBuffer _buffer;
+        IRBuffer _output;
+    };
+
+    struct OptDeadCodeElim
+    {
+        std::unordered_set<int> _used;
+        OptFilter _filter;
+    };
+
+    struct Optimizer
+    {
+        IRBuffer _buffer;
+        IRBuffer output;
+        OptFilter guard;
+        OptFilter fold;
+        OptDeadCodeElim dead;
+
+        Optimizer() {
+            fold._enabled = true;
+            guard._enabled = true;
+        }
+    };
+
     struct VirtualMachine
     {
         unsigned char* program;
@@ -464,6 +514,7 @@ namespace SunScript
         bool tracing;
         bool tracingPaused;
         bool hot;
+        int optimizationLevel;
         int statusCode;
         int errorCode;
         int resumeCode;
@@ -605,6 +656,43 @@ inline static void RecordReturn(FunctionInfo* info, unsigned int pc, char type)
     }
 }
 
+//================
+// IR Buffer
+//================
+
+IRBuffer::IRBuffer() : _head(0), _tail(0)
+{
+    std::memset(_buffer, 0, sizeof(_buffer));
+    std::memset(_buffer_left, 0, sizeof(_buffer_left));
+    std::memset(_buffer_right, 0, sizeof(_buffer_right));
+}
+
+void IRBuffer::write(const InsData& data, int left, int right)
+{
+    const int pos = _head % BUFFER_SIZE;
+    _buffer[pos] = data;
+    _buffer_left[pos] = left;
+    _buffer_right[pos] = right;
+    _head++;
+}
+
+void IRBuffer::at(int ref, InsData* data, int* left, int* right)
+{
+    const int pos = ref % BUFFER_SIZE;
+    *data = _buffer[pos];
+    *left = _buffer_left[pos];
+    *right = _buffer_right[pos];
+}
+
+void IRBuffer::read(InsData* data, int* left, int* right)
+{
+    const int pos = _tail % BUFFER_SIZE;
+    *data = _buffer[pos];
+    *left = _buffer_left[pos];
+    *right = _buffer_right[pos];
+    _tail++;
+}
+
 //============================
 // TRACING IR (SSA form)
 //============================
@@ -663,8 +751,324 @@ static std::vector<Code> Instructions = {
     Code({ IR_PHI, INS_LEFT | INS_RIGHT }),
     Code({ IR_SNAP, INS_SNAP }),
     Code({ IR_UNBOX, INS_LEFT | INS_TYPE }),
+    Code({ IR_NOP, 0 }),
     Code({ IR_CONV_INT_TO_REAL, INS_LEFT })
 };
+
+//============================
+// TRACING OPTIMIZER
+//============================
+
+inline static void Trace_Constant(std::vector<unsigned char>& constants, int val)
+{
+    constants.push_back(static_cast<unsigned char>(val & 0xFF));
+    constants.push_back(static_cast<unsigned char>((val >> 8) & 0xFF));
+    constants.push_back(static_cast<unsigned char>((val >> 16) & 0xFF));
+    constants.push_back(static_cast<unsigned char>((val >> 24) & 0xFF));
+}
+
+inline static void Trace_Constant(std::vector<unsigned char>& constants, real val)
+{
+    unsigned char* data = reinterpret_cast<unsigned char*>(&val);
+    for (int i = 0; i < SUN_REAL_SIZE; i += 4)
+    {
+        constants.push_back(data[i]);
+        constants.push_back(data[i + 1]);
+        constants.push_back(data[i + 2]);
+        constants.push_back(data[i + 3]);
+    }
+}
+
+static void Opt_ConstantFold_Filter(OptFilter& filter, std::vector<unsigned char>& constants)
+{
+    InsData data;
+    int left;
+    int right;
+
+    // Read next instruction
+    if (filter._input.empty())
+    {
+        return;
+    }
+
+    // The output cannot be written to at this time
+    if (filter._output.full())
+    {
+        return;
+    }
+
+    filter._input.read(&data, &left, &right);
+
+    // If the buffer is full then flush to the output
+    if (filter._buffer.full())
+    {
+        InsData data;
+        int left;
+        int right;
+        filter._buffer.read(&data, &left, &right);
+        filter._output.write(data, left, right);
+    }
+
+    switch (data.id)
+    {
+    case IR_ADD_INT:
+    case IR_SUB_INT:
+    case IR_MUL_INT:
+    case IR_DIV_INT: {
+        InsData lData; int ll; int lr;
+        filter._buffer.at(left, &lData, &ll, &lr);
+
+        InsData rData; int rl; int rr;
+        filter._buffer.at(right, &rData, &rl, &rr);
+
+        if (filter._buffer.exists(left) && filter._buffer.exists(right) &&
+            lData.id == IR_LOAD_INT && rData.id == IR_LOAD_INT)
+        {
+            int* valLeft = reinterpret_cast<int*>(&constants.data()[lData.constant]);
+            int* valRight = reinterpret_cast<int*>(&constants.data()[rData.constant]);
+
+            int result = 0;
+            
+            switch (data.id)
+            {
+            case IR_ADD_INT:
+                result = *valRight + *valLeft;
+                break;
+            case IR_SUB_INT:
+                result = *valRight - *valLeft;
+                break;
+            case IR_MUL_INT:
+                result = *valRight * *valLeft;
+                break;
+            case IR_DIV_INT:
+                result = *valRight / *valLeft;
+                break;
+            }
+             
+            InsData ins = { .id = IR_LOAD_INT, .constant = int(constants.size()) };
+            filter._buffer.write(ins, 0, 0);
+
+            Trace_Constant(constants, result);
+        }
+        else
+        {
+            filter._buffer.write(data, left, right);
+        }
+    }
+        break;
+    case IR_ADD_REAL:
+    case IR_SUB_REAL:
+    case IR_MUL_REAL:
+    case IR_DIV_REAL: {
+        InsData lData; int ll; int lr;
+        filter._buffer.at(left, &lData, &ll, &lr);
+
+        InsData rData; int rl; int rr;
+        filter._buffer.at(right, &rData, &rl, &rr);
+
+        if (filter._buffer.exists(left) && filter._buffer.exists(right) &&
+            lData.id == IR_LOAD_INT && rData.id == IR_LOAD_INT)
+        {
+            real* valLeft = reinterpret_cast<real*>(&constants.data()[lData.constant]);
+            real* valRight = reinterpret_cast<real*>(&constants.data()[rData.constant]);
+
+            real result = 0;
+
+            switch (data.id)
+            {
+            case IR_ADD_REAL:
+                result = *valRight + *valLeft;
+                break;
+            case IR_SUB_REAL:
+                result = *valRight - *valLeft;
+                break;
+            case IR_MUL_REAL:
+                result = *valRight * *valLeft;
+                break;
+            case IR_DIV_REAL:
+                result = *valRight / *valLeft;
+                break;
+            }
+
+            InsData ins = { .id = IR_LOAD_INT, .constant = int(constants.size()) };
+            filter._buffer.write(ins, 0, 0);
+
+            Trace_Constant(constants, result);
+        }
+        else
+        {
+            filter._buffer.write(data, left, right);
+        }
+    }
+        break;
+    default:
+        filter._buffer.write(data, left, right);
+        break;
+    }
+}
+
+//static void Opt_Guard_Filter(Optimizer& opt, std::vector<unsigned char>& constants)
+//{
+//    auto& filter = opt.guard;
+//
+//    switch (data.id)
+//    {
+//    case IR_CMP_INT:
+//    case IR_CMP_REAL:
+//    case IR_CMP_STRING: {
+//        bool found = false;
+//        for (int i = 0; i < Optimizer::BUFFER_SIZE; i++)
+//        {
+//            if (opt._buffer_left[i] == left &&
+//                opt._buffer_right[i] == right)
+//            {
+//                found = true;
+//                break;
+//            }
+//        }
+//
+//        if (!found)
+//        {
+//            opt._buffer[opt._pos] = data;
+//            opt._buffer_left[opt._pos] = left;
+//            opt._buffer_right[opt._pos] = right;
+//
+//            opt._pos = (opt._pos + 1) % Optimizer::BUFFER_SIZE;
+//        }
+//    }
+//        break;
+//    case IR_GUARD: {
+//        bool found = false;
+//        for (int i = 0; i < Optimizer::BUFFER_SIZE; i++)
+//        {
+//            if (opt._buffer[i].jump == data.jump)
+//            {
+//                found = true;
+//                break;
+//            }
+//        }
+//
+//        if (!found)
+//        {
+//            opt._buffer[opt._pos] = data;
+//            opt._buffer_left[opt._pos] = -1;
+//            opt._buffer_right[opt._pos] = -1;
+//
+//            opt._pos = (opt._pos + 1) % Optimizer::BUFFER_SIZE;
+//        }
+//    }
+//        break;
+//    }
+//}
+
+static void Opt_Optimize_Forward(Optimizer& opt, std::vector<unsigned char>& constants, TraceNode* node)
+{
+    opt._buffer.write(node->data, node->left ? node->left->ref : 0, node->right ? node->right->ref : 0);
+
+    InsData data;
+    int left;
+    int right;
+
+    //if (opt.guard._enabled)
+    //{
+    //    Opt_Guard_Filter(opt, constants);
+    //}
+
+    if (opt.fold._enabled)
+    {
+        opt._buffer.read(&data, &left, &right);
+        opt.fold._input.write(data, left, right);
+        Opt_ConstantFold_Filter(opt.fold, constants);
+        if (!opt.fold._output.empty())
+        {
+            opt.fold._output.read(&data, &left, &right);
+            opt.output.write(data, left, right);
+
+            if (data.id == IR_PHI)
+            {
+                opt.dead._used.insert(left);
+                opt.dead._used.insert(right);
+            }
+        }
+    }
+    else
+    {
+        opt._buffer.read(&data, &left, &right);
+        opt.output.write(data, left, right);
+
+        if (data.id == IR_PHI)
+        {
+            opt.dead._used.insert(left);
+            opt.dead._used.insert(right);
+        }
+    }
+}
+
+static void Opt_Optimize_Backward(Optimizer& opt, std::vector<unsigned char>& constants, TraceNode* node)
+{
+    // TODO: snapshots if we remove the code which sets a variable.
+    // When we restore a snapshot, this variable won't have a value?
+    // Will this cause a problem?
+
+    switch (node->data.id)
+    {
+    case IR_LOAD_INT:
+    case IR_ADD_INT:
+    case IR_SUB_INT:
+    case IR_MUL_INT:
+    case IR_DIV_INT:
+    case IR_LOAD_REAL:
+    case IR_ADD_REAL:
+    case IR_SUB_REAL:
+    case IR_MUL_REAL:
+    case IR_DIV_REAL:
+        if (opt.dead._used.find(node->ref) == opt.dead._used.end())
+        {
+            // Instruction never used, output an IR_NOP
+            InsData data = { .id = IR_NOP };
+            opt.output.write(data, -1, -1);
+        }
+        else
+        {
+            if (node->left) { opt.dead._used.insert(node->left->ref); }
+            if (node->right) { opt.dead._used.insert(node->right->ref); }
+            opt.output.write(node->data, node->left ? node->left->ref : -1, node->right ? node->right->ref : -1);
+        }
+        break;
+    default:
+        if (node->left) { opt.dead._used.insert(node->left->ref); }
+        if (node->right) { opt.dead._used.insert(node->right->ref); }
+        opt.output.write(node->data, node->left ? node->left->ref : -1, node->right ? node->right->ref : -1);
+        break;
+    }
+}
+
+static void Opt_Drain(Optimizer& opt, std::vector<unsigned char>& constants)
+{
+    while (!opt.fold._buffer.empty() && !opt.fold._output.full())
+    {
+        InsData data; int left; int right;
+        opt.fold._buffer.read(&data, &left, &right);
+        opt.fold._output.write(data, left, right);
+    }
+
+    while (!opt.output.full() && !opt.fold._output.empty())
+    {
+        InsData data; int left; int right;
+        opt.fold._output.read(&data, &left, &right);
+        opt.output.write(data, left, right);
+
+        if (data.id == IR_PHI)
+        {
+            opt.dead._used.insert(left);
+            opt.dead._used.insert(right);
+        }
+    }
+}
+
+//==================
+// TRACING
+//==================
 
 inline static TraceNode* TTOP(VirtualMachine* vm) { return vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 1); }
 inline static TraceNode* TNEXT(VirtualMachine* vm) { return vm->tt.curTrace->refs.at(vm->tt.curTrace->refs.size() - 2); }
@@ -672,19 +1076,6 @@ inline static void TPOP(VirtualMachine* vm) { vm->tt.curTrace->refs.resize(vm->t
 inline static void TPOP2(VirtualMachine* vm) { vm->tt.curTrace->refs.resize(vm->tt.curTrace->refs.size() - 2); }
 inline static void TPUSH(VirtualMachine* vm, TraceNode* node) { vm->tt.curTrace->refs.push_back(node); }
 inline static void TINC(VirtualMachine* vm) { vm->tt.curTrace->ref++; }
-
-inline static TraceNode* Trace_CreateNode(VirtualMachine* vm, const int type)
-{
-    TraceNode* node = reinterpret_cast<TraceNode*>(vm->tt.curTrace->mm.New(sizeof(TraceNode), TY_OBJECT));
-    std::memset(node, 0, sizeof(TraceNode));
-    node->ref = vm->tt.curTrace->ref;
-    node->flags = 0;
-    node->pc = vm->programCounter;
-    node->type = type;
-    vm->tt.curTrace->nodes.push_back(node);
-
-    return node;
-}
 
 inline static TraceNode* Trace_Instruction(VirtualMachine* vm, const int type, const InsData& ins)
 {
@@ -825,9 +1216,9 @@ inline static void Trace_Constant(VirtualMachine* vm, const char* str)
     vm->traceConstants.push_back(0);
 }
 
-static void Trace_Node(VirtualMachine* vm,  TraceNode* node)
+static void Trace_Node(VirtualMachine* vm, TraceNode* node)
 {
-    auto& ins = node->data;
+    const auto& ins = node->data;
 
     const auto& code = std::lower_bound(Instructions.begin(), Instructions.end(), ins.id, [](const Code& c, const int val) { return c.id < val; });
     assert(code->id == ins.id);
@@ -1303,20 +1694,106 @@ static void Trace_Finalize(VirtualMachine* vm)
     // Process the nodes and copy the data over to a new buffer.
     // The nodes may have be rearranged and thus the data need reordering.
 
-    const size_t size = vm->traceConstants.size() + sizeof(int);
-    const int constantSize = int(vm->traceConstants.size());
-
-    vm->tt.curTrace->trace.resize(size);
-    
-    size_t pos = 0;
-    std::memcpy(vm->tt.curTrace->trace.data(), &constantSize, sizeof(int));
-    pos += sizeof(int);
-    std::memcpy(vm->tt.curTrace->trace.data() + pos, vm->traceConstants.data(), constantSize);
-    pos += constantSize;
-
-    for (TraceNode* node : vm->tt.curTrace->nodes)
+    if (vm->optimizationLevel >= 1)
     {
-        Trace_Node(vm, node);
+        std::vector<TraceNode> nodes;
+        nodes.reserve(vm->tt.curTrace->nodes.size());
+
+        std::vector<TraceNode> backward;
+        backward.reserve(vm->tt.curTrace->nodes.size());
+
+        Optimizer opt;
+
+        //==================
+        // Forward pass
+        //==================
+
+        for (TraceNode* node : vm->tt.curTrace->nodes)
+        {
+            Opt_Optimize_Forward(opt, vm->traceConstants, node);
+
+            if (!opt.output.empty())
+            {
+                int left = -1;
+                int right = -1;
+                TraceNode n = {};
+                opt.output.read(&n.data, &left, &right);
+                n.ref = int(backward.size());
+                n.left = left == -1 ? nullptr : vm->tt.curTrace->nodes[left];
+                n.right = right == -1 ? nullptr : vm->tt.curTrace->nodes[right];
+                backward.push_back(n);
+            }
+        }
+
+        Opt_Drain(opt, vm->traceConstants);
+
+        while (!opt.output.empty())
+        {
+            TraceNode n = {};
+            int left = -1;
+            int right = -1;
+            opt.output.read(&n.data, &left, &right);
+            n.left = left == -1 ? nullptr : vm->tt.curTrace->nodes[left];
+            n.right = right == -1 ? nullptr : vm->tt.curTrace->nodes[right];
+            n.ref = int(backward.size());
+            backward.push_back(n);
+        }
+
+        //==================
+        // Backward pass
+        //==================
+
+        for (int i = int(backward.size()) - 1; i >= 0; i--)
+        {
+            Opt_Optimize_Backward(opt, vm->traceConstants, &backward[i]);
+
+            if (!opt.output.empty())
+            {
+                TraceNode n = {}; int left; int right;
+                opt.output.read(&n.data, &left, &right);
+                n.left = left == -1 ? nullptr : vm->tt.curTrace->nodes[left];
+                n.right = right == -1 ? nullptr : vm->tt.curTrace->nodes[right];
+                nodes.push_back(n);
+            }
+        }
+
+        //==================
+        // Finalize
+        //==================
+
+        const size_t size = vm->traceConstants.size() + sizeof(int);
+        const int constantSize = int(vm->traceConstants.size());
+
+        vm->tt.curTrace->trace.resize(size);
+
+        size_t pos = 0;
+        std::memcpy(vm->tt.curTrace->trace.data(), &constantSize, sizeof(int));
+        pos += sizeof(int);
+        std::memcpy(vm->tt.curTrace->trace.data() + pos, vm->traceConstants.data(), constantSize);
+        pos += constantSize;
+
+        for (int i = int(nodes.size()) - 1; i >= 0; i--)
+        {
+            Trace_Node(vm, &nodes[i]);
+        }
+    }
+    else
+    {
+        const size_t size = vm->traceConstants.size() + sizeof(int);
+        const int constantSize = int(vm->traceConstants.size());
+
+        vm->tt.curTrace->trace.resize(size);
+
+        size_t pos = 0;
+        std::memcpy(vm->tt.curTrace->trace.data(), &constantSize, sizeof(int));
+        pos += sizeof(int);
+        std::memcpy(vm->tt.curTrace->trace.data() + pos, vm->traceConstants.data(), constantSize);
+        pos += constantSize;
+
+        for (TraceNode* node : vm->tt.curTrace->nodes)
+        {
+            Trace_Node(vm, node);
+        }
     }
 }
 
@@ -1392,6 +1869,7 @@ VirtualMachine* SunScript::CreateVirtualMachine()
     vm->program = nullptr;
     vm->debugLines = nullptr;
     vm->comparer = 0;
+    vm->optimizationLevel = 0;
     std::memset(&vm->jit, 0, sizeof(vm->jit));
     return vm;
 }
@@ -1405,6 +1883,11 @@ void SunScript::ShutdownVirtualMachine(VirtualMachine* vm)
 
     delete[] vm->program;
     delete vm;
+}
+
+void SunScript::SetOptimizationLevel(VirtualMachine* vm, int level)
+{
+    vm->optimizationLevel = level;
 }
 
 void SunScript::SetHandler(VirtualMachine* vm, int handler(VirtualMachine* vm))
@@ -1531,7 +2014,7 @@ static void Push_String(VirtualMachine* vm, const char* str)
 {
     assert(vm->statusCode == VM_OK);
 
-    char* data = reinterpret_cast<char*>(vm->mm.New(sizeof(char*), TY_STRING));
+    char* data = reinterpret_cast<char*>(vm->mm.New(strlen(str) + 1, TY_STRING));
     std::memcpy(data, str, strlen(str) + 1);
     vm->stack.push(data);
 }
