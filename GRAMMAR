@@ -9,10 +9,11 @@ exprStmt       - expression ";"
                  | ifStmt 
                  | forStmt
                  | function
+                 | class
                  | yield
                  ;
 
-ifSrmt         - "if" "(" expression ")" "{" (statement*) "}" ( "else" ( ifStmt | "{" statement* "}" ) )? ;
+ifStmt         - "if" "(" expression ")" "{" (statement*) "}" ( "else" ( ifStmt | "{" statement* "}" ) )? ;
 whileStmt      - "while" "(" expression ")" "{" statement* "}" ;
 forStmt        - "for" "(" declaration? ";" expression? ";" assignment? ")" "{" statement* "}" ;
 
@@ -24,17 +25,22 @@ comparison     - term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
 term           - factor ( ( "-" | "+" ) factor )* ;
 factor         - unary ( ( "/" | "*" ) unary )* ;
 unary          - ( "!" | "-" ) unary
-               | call ;
+                 | call
+                 ;
 primary        - NUMBER | STRING | "true" | "false" | "nil"
-               | "(" expression ")" ;
+                 | "(" expression ")"
+                 | "new" identifier
+                 ;
 call           - primary ( "(" argument? ")" );
 argument       - expression ( "," expression )* ;
 function       - "function" identifier "(" parameter? ")" "{" (statement*) "}" ;
 parameter      - identifier ( "," identifier )* ;
+class          - "class" identifier "{" (constructor | function)* "}" ;
+constructor    - identifier "(" parameter? ")" "{" (statement*) "}" ;
 return         - "return" expression ;
 yield          - "yield" call ;
-assignment     - indentifier "=" expression
-                | indentifier ( "++" | "--")
-                | indentifier ( "+=" | "-=" | "*=" | "/=") expression
-                ;
+assignment     - identifier "=" expression
+                 | identifier ( "++" | "--")
+                 | identifier ( "+=" | "-=" | "*=" | "/=") expression
+                 ;
 declaration    - "var" indentifier ";" ;

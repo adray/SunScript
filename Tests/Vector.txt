@@ -1,0 +1,47 @@
+
+class Vector2
+{
+    Vector2()
+    {
+        self.x = 0.0;
+        self.y = 0.0;
+    }
+
+    function add(vec)
+    {
+        self.x += vec.x;
+        self.y += vec.y;
+    }
+
+    function sub(vec)
+    {
+        self.x -= vec.x;
+        self.y -= vec.y;
+    }
+
+    function dot(vec)
+    {
+        return self.x * vec.x + self.y * vec.y;
+    }
+
+    function scale(factor)
+    {
+        self.x *= factor;
+        self.y *= factor;
+    }
+}
+
+var v1 = new Vector2;
+var v2 = new Vector2;
+v1.x = 5.0;
+v1.y = 0.0;
+v2.x = 2.0;
+v2.y = 7.0;
+v1.scale(3.0);
+v1.add(v2);
+
+var d = v1.dot(v2);
+//DebugLog(d);
+
+//var q = v1.scale;
+//DebugLog(q);

@@ -54,6 +54,21 @@ enum class TokenType
     RETURN,
     WHILE,
     FOR,
+    CLASS,
+    NEW,
+    SELF,
+
+    // Reserved keywords
+
+    PUBLIC,
+    PRIVATE,
+    PROTECTED,
+    INTERNAL,
+    THIS,
+    BASE,
+    THROW,
+    CATCH,
+    TRY,
 
     // Literals
 
@@ -137,6 +152,18 @@ Scanner::Scanner()
     AddKeyword("return", TokenType::RETURN);
     AddKeyword("while", TokenType::WHILE);
     AddKeyword("for", TokenType::FOR);
+    AddKeyword("class", TokenType::CLASS);
+    AddKeyword("new", TokenType::NEW);
+    AddKeyword("public", TokenType::PUBLIC);
+    AddKeyword("private", TokenType::PRIVATE);
+    AddKeyword("protected", TokenType::PROTECTED);
+    AddKeyword("internal", TokenType::INTERNAL);
+    AddKeyword("self", TokenType::SELF);
+    AddKeyword("this", TokenType::THIS);
+    AddKeyword("base", TokenType::BASE);
+    AddKeyword("throw", TokenType::THROW);
+    AddKeyword("catch", TokenType::CATCH);
+    AddKeyword("try", TokenType::TRY);
 }
 
 void Scanner::AddKeyword(const std::string& keyword, TokenType token)
@@ -475,6 +502,40 @@ void Scanner::AddToken(TokenType type)
 }
 
 //===================
+// Expr Node
+//===================
+
+enum class ExprNode
+{
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    MODULO,
+    AND,
+    OR,
+    EQUALS_EQUALS,
+    NOT_EQUALS,
+    NOT,
+    EQUALS,
+    LESS,
+    GREATER,
+    LESS_EQUALS,
+    GREATER_EQUALS,
+    NUMBER,
+    INTEGER,
+    STRING,
+    INCREMENT,
+    DECREMENT,
+    SELF,
+    NEW,
+    IDENTIFIER,
+    TABLE_GET,
+    TABLE_SET,
+    CALL_DELEGATE
+};
+
+//===================
 // Call
 //===================
 
@@ -549,18 +610,37 @@ private:
 class Expr
 {
 public:
-    Expr(Expr* left, Expr* right, Token operation)
+    Expr(Expr* left, Expr* right, const Token& token, ExprNode node)
     :
         _left(left),
         _right(right),
-        _operation(operation),
+        _node(node),
+        _token(token),
         _call(nullptr)
     {
     }
 
+    Expr* Clone()
+    {
+        Expr* left = _left;
+        if (left)
+        {
+            left = left->Clone();
+        }
+
+        Expr* right = _right;
+        if (right)
+        {
+            right = right->Clone();
+        }
+
+        return new Expr(left, right, _token, _node);
+    }
+
     inline Expr* Left() { return _left; }
     inline Expr* Right() { return _right; }
-    inline Token Op() { return _operation; }
+    inline Token Op() { return _token; }
+    inline ExprNode Node() { return _node; }
     inline Call* GetCall() { return _call; }
     inline void SetCall(Call* call) { _call = call; }
     inline Fold& GetFold() { return _fold; }
@@ -569,7 +649,8 @@ private:
     Expr* _left;
     Expr* _right;
     Call* _call;
-    Token _operation;
+    ExprNode _node;
+    Token _token;
     Fold _fold;
 };
 
@@ -749,10 +830,19 @@ private:
     {
         bool _return;
         ProgramBlock* _block;
+        std::string _className;
         std::unordered_map<std::string, int> _vars;
         std::stack<std::unordered_set<std::string>> _scope;
+        std::vector<std::string> _functions;
+        bool _isConstructor;
 
-        StackFrame() : _return(false), _block(nullptr) {}
+        StackFrame()
+            :
+            _return(false),
+            _block(nullptr),
+            _isConstructor(false)
+        {
+        }
     };
 
     inline ProgramBlock* Block() { return _frames.top()._block; }
@@ -772,13 +862,16 @@ private:
     void ParseIfStatement();
     void ParseElse(Branch& prevBr);
     void ParseAssignmentStatement();
-    Expr* ParseAssignment();
+    Expr* ParseAssignment(Expr* lhs);
     void ParseFunction();
+    void ParseConstructor(const std::string& name);
     void ParseReturn();
     void ParseYield();
     void ParseStatement();
     void ParseStatementBlock();
     void ParseParameter(std::vector<std::string>& params);
+    void ParseClass();
+    void ParseSelf();
     Expr* ParseExprStatement();
     Expr* ParseExpression();
     Expr* ParseEquality();
@@ -791,10 +884,14 @@ private:
     Expr* ParsePrimary();
     Expr* ParseCall();
     Call* ParseArgument();
+    Expr* ParseAssignmentLhs();
     char Flip(char jump);
-    int GetOrCreateFunction(const std::string& name, ProgramBlock* blk);
+    int DeclareFunction(const std::string& name, ProgramBlock* blk);
+    int ForwardDeclareFunction(const std::string& name);
     void PushScope();
     void PopScope();
+    void PushClass(const std::string& name);
+    void PopClass();
 
     bool _scanning;
     int _pos;
@@ -805,6 +902,7 @@ private:
     Program* _program;
 
     std::unordered_map<std::string, Function> _functions;
+    std::unordered_set<std::string> _classes;
     std::stack<StackFrame> _frames;
 };
 
@@ -820,7 +918,19 @@ Parser::Parser(const std::vector<Token>& tokens)
     PushScope();
     _frames.top()._block = CreateProgramBlock(true, "main", 0);
 
-    GetOrCreateFunction("main", _frames.top()._block);
+    DeclareFunction("main", _frames.top()._block);
+}
+
+void Parser::PushClass(const std::string& name)
+{
+    StackFrame& frame = _frames.emplace();
+    frame._className = name;
+}
+
+void Parser::PopClass()
+{
+    assert(_frames.size() > 0);
+    _frames.pop();
 }
 
 void Parser::PushScope()
@@ -842,7 +952,24 @@ void Parser::PopScope()
     top._scope.pop();
 }
 
-int Parser::GetOrCreateFunction(const std::string& name, ProgramBlock* blk)
+int Parser::ForwardDeclareFunction(const std::string& name)
+{
+    int id = 0;
+    const auto& func = _functions.find(name);
+    if (func == _functions.end())
+    {
+        id = CreateFunction(_program);
+        _functions.insert(std::pair<std::string, Function>(name, Function{ .id = id, .blk = nullptr }));
+    }
+    else
+    {
+        id = func->second.id;
+    }
+
+    return id;
+}
+
+int Parser::DeclareFunction(const std::string& name, ProgramBlock* blk)
 {
     int id = 0;
     const auto& func = _functions.find(name);
@@ -855,8 +982,15 @@ int Parser::GetOrCreateFunction(const std::string& name, ProgramBlock* blk)
     {
         id = func->second.id;
         
-        // Update the block if it is set
-        if (blk) { func->second.blk = blk; }
+        if (func->second.blk == nullptr)
+        {
+            func->second.blk = blk;
+        }
+        else
+        {
+            // Otherwise the function has been declared already
+            id = -1;
+        }
     }
 
     return id;
@@ -1098,6 +1232,42 @@ void Parser::EmitExpr(Expr* expr)
         return;
     }
 
+    auto& frame = _frames.top();
+    ProgramBlock* block = frame._block;
+    const bool binary = expr->Left() && expr->Right();
+
+    Token tok = expr->Op();
+
+    if (expr->GetCall())
+    {
+        if (expr->Node() == ExprNode::TABLE_GET)
+        {
+            // TODO: we need to get the 'self' pushed after the args?
+
+            auto call = expr->GetCall();
+
+            auto& args = call->Args();
+            for (int i = int(args.size()) - 1; i >= 0; i--)
+            {
+                EmitExpr(args[i]);
+            }
+
+            EmitExpr(expr->Left());
+            EmitDup(block);
+            EmitTableGet(block, expr->Op().String());
+
+            if (call->Discard())
+            {
+                EmitCallM(block, static_cast<unsigned char>(call->Args().size()) + 1);
+            }
+            else
+            {
+                EmitCallO(block, static_cast<unsigned char>(call->Args().size()) + 1);
+            }
+            return;
+        }
+    }
+
     if (expr->Left())
     {
         EmitExpr(expr->Left());
@@ -1108,32 +1278,27 @@ void Parser::EmitExpr(Expr* expr)
         EmitExpr(expr->Right());
     }
 
-    auto& frame = _frames.top();
-    ProgramBlock* block = frame._block;
-    const bool binary = expr->Left() && expr->Right();
-
-    Token tok = expr->Op();
-    switch (tok.Type())
+    switch (expr->Node())
     {
-    case TokenType::EQUALS_EQUALS:
+    case ExprNode::EQUALS_EQUALS:
         EmitCompare(block);
         break;
-    case TokenType::NOT_EQUALS:
+    case ExprNode::NOT_EQUALS:
         EmitCompare(block);
         break;
-    case TokenType::INCREMENT:
+    case ExprNode::INCREMENT:
         EmitIncrement(block);
         break;
-    case TokenType::DECREMENT:
+    case ExprNode::DECREMENT:
         EmitDecrement(block);
         break;
-    case TokenType::PLUS:
+    case ExprNode::ADD:
         EmitAdd(block);
         break;
-    case TokenType::STAR:
+    case ExprNode::MUL:
         EmitMul(block);
         break;
-    case TokenType::MINUS:
+    case ExprNode::SUB:
         if (binary)
         {
             EmitSub(block);
@@ -1143,31 +1308,49 @@ void Parser::EmitExpr(Expr* expr)
             EmitUnaryMinus(block);
         }
         break;
-    case TokenType::SLASH:
+    case ExprNode::DIV:
         EmitDiv(block);
         break;
-    case TokenType::GREATER:
+    case ExprNode::GREATER:
         EmitCompare(block);
         break;
-    case TokenType::LESS:
+    case ExprNode::LESS:
         EmitCompare(block);
         break;
-    case TokenType::GREATER_EQUALS:
+    case ExprNode::GREATER_EQUALS:
         EmitCompare(block);
         break;
-    case TokenType::LESS_EQUALS:
+    case ExprNode::LESS_EQUALS:
         EmitCompare(block);
         break;
-    case TokenType::STRING:
+    case ExprNode::STRING:
         EmitPush(block, tok.String());
         break;
-    case TokenType::NUMBER:
+    case ExprNode::NUMBER:
         EmitPush(block, tok.Number());
         break;
-    case TokenType::INTEGER:
+    case ExprNode::INTEGER:
         EmitPush(block, tok.Integer());
         break;
-    case TokenType::IDENTIFIER:
+    case ExprNode::SELF:
+        EmitPushLocal(block, 0);
+        break;
+    case ExprNode::NEW:
+        EmitTableNew(block);
+        if (expr->GetCall())
+        {
+            const int id = ForwardDeclareFunction(tok.String() + "::.ctr");
+            EmitDup(block);
+            EmitCallD(block, id, 1);
+        }
+        break;
+    case ExprNode::TABLE_GET:
+        EmitTableGet(block, expr->Op().String());
+        break;
+    case ExprNode::TABLE_SET:
+        EmitTableSet(block, expr->Op().String());
+        break;
+    case ExprNode::IDENTIFIER:
         if (expr->GetCall())
         {
             Call* call = expr->GetCall();
@@ -1177,7 +1360,7 @@ void Parser::EmitExpr(Expr* expr)
                 EmitExpr(args[i]);
             }
 
-            const int id = GetOrCreateFunction(tok.String(), nullptr);
+            const int id = ForwardDeclareFunction(tok.String());
 
             if (call->Yield())
             {
@@ -1187,7 +1370,7 @@ void Parser::EmitExpr(Expr* expr)
             else if (call->Discard())
             {
                 EmitDebug(block, tok.Line());
-                EmitCallX(block, id, static_cast<unsigned char>(args.size()));
+                EmitCallD(block, id, static_cast<unsigned char>(args.size()));
             }
             else
             {
@@ -1217,23 +1400,26 @@ void Parser::EmitExpr(Expr* expr)
 
 void Parser::FreeExpr(Expr* expr)
 {
-    if (expr->Right())
+    if (expr)
     {
-        FreeExpr(expr->Right());
-    }
+        if (expr->Right())
+        {
+            FreeExpr(expr->Right());
+        }
 
-    if (expr->Left())
-    {
-        FreeExpr(expr->Left());
-    }
+        if (expr->Left())
+        {
+            FreeExpr(expr->Left());
+        }
 
-    if (expr->GetCall())
-    {
-        delete expr->GetCall();
-        expr->SetCall(nullptr);
-    }
+        if (expr->GetCall())
+        {
+            delete expr->GetCall();
+            expr->SetCall(nullptr);
+        }
 
-    delete expr;
+        delete expr;
+    }
 }
 
 void Parser::SetError(const std::string& text)
@@ -1308,17 +1494,33 @@ void Parser::ParseReturn()
         if (Match(TokenType::RETURN))
         {
             Advance();
-            Expr* expr = ParseExprStatement();
-            if (expr)
-            {
-                EmitExpr(expr);
-                FreeExpr(expr);
 
-                EmitReturn(Block());
+            if (_frames.top()._isConstructor)
+            {
+                if (Match(TokenType::SEMICOLON))
+                {
+                    Advance();
+                    EmitReturn(Block());
+                }
+                else
+                {
+                    SetError("Unexpected token.");
+                }
             }
             else
             {
-                EmitReturn(Block());
+                Expr* expr = ParseExprStatement();
+                if (expr)
+                {
+                    EmitExpr(expr);
+                    FreeExpr(expr);
+
+                    EmitReturn(Block());
+                }
+                else
+                {
+                    EmitReturn(Block());
+                }
             }
 
             // If there is a top level return record it.
@@ -1362,35 +1564,177 @@ void Parser::ParseParameter(std::vector<std::string>& params)
     }
 }
 
-void Parser::ParseFunction()
+void Parser::ParseSelf()
 {
-    if (Match(TokenType::FUNCTION))
+    if (Match(TokenType::SELF))
+    {
+        // Self is only valid within a class
+        if (_frames.top()._className.size() > 0)
+        {
+            Expr* lhs = ParseAssignmentLhs();
+            Expr* expr = ParseAssignment(lhs);
+
+            if (Match(TokenType::SEMICOLON))
+            {
+                Advance();
+
+                EmitExpr(expr);
+                EmitExpr(lhs);
+            }
+            else
+            {
+                SetError("Unexpected token.");
+            }
+
+            FreeExpr(expr);
+            FreeExpr(lhs);
+        }
+        else
+        {
+            SetError("Unexpected token self.");
+        }
+    }
+    else
+    {
+        SetError("Unexpected token, expected self.");
+    }
+}
+
+void Parser::ParseClass()
+{
+    if (Match(TokenType::CLASS))
     {
         Advance();
-
-        ProgramBlock* block = nullptr;
-        std::vector<std::string> params;
 
         if (Match(TokenType::IDENTIFIER))
         {
             Token token = Peek();
             Advance();
-        
+
+            if (Match(TokenType::OPEN_BRACE))
+            {
+                Advance();
+                
+                if (_classes.find(token.String()) == _classes.end())
+                {
+                    PushClass(token.String());
+                    _classes.insert(token.String());
+
+                    while (Match(TokenType::FUNCTION) || Match(TokenType::IDENTIFIER))
+                    {
+                        if (Match(TokenType::FUNCTION))
+                        {
+                            ParseFunction();
+                        }
+                        else if (Match(TokenType::IDENTIFIER))
+                        {
+                            ParseConstructor(token.String());
+                        }
+                    }
+
+                    if (Match(TokenType::CLOSE_BRACE))
+                    {
+                        Advance();
+
+                        // Generate base function
+                        const std::string baseName = token.String() + "::.base";
+                        ProgramBlock* base = CreateProgramBlock(false, baseName, 1);
+                        const int baseId = DeclareFunction(baseName, base);
+                        EmitLocal(base, "self");
+                        EmitPop(base, 0);
+                        EmitParameter(base, "self");
+
+                        // Initialize functions
+                        for (auto& function : _frames.top()._functions)
+                        {
+                            const int id = _functions[token.String() + "::" + function].id;
+                            EmitPushDelegate(base, id);
+                            EmitPushLocal(base, 0);
+                            EmitTableSet(base, function);
+                        }
+
+                        EmitReturn(base);
+                        EmitProgramBlock(_program, base);
+
+                        // Generate default constructor?
+                        const std::string name = token.String() + "::.ctr";
+                        const auto& it = _functions.find(name);
+                        if (it == _functions.end() || !it->second.blk)
+                        {
+                            ProgramBlock* blk = CreateProgramBlock(false, name, 1);
+                            DeclareFunction(name, blk);
+                            EmitLocal(blk, "self");
+                            EmitPop(blk, 0);
+                            EmitParameter(blk, "self");
+                            EmitPushLocal(blk, 0);
+                            EmitCallD(blk, baseId, 1);
+                            EmitReturn(blk);
+                            EmitProgramBlock(_program, blk);
+                        }
+                    }
+                    else
+                    {
+                        SetError("Unexpected token, expected '}'");
+                    }
+
+                    PopClass();
+                }
+                else
+                {
+                    SetError("Duplicate class definition");
+                }
+            }
+            else
+            {
+                SetError("Unexpected token, expected '{'");
+            }
+        }
+        else
+        {
+            SetError("Unexpected token, expected the name of the class.");
+        }
+    }
+}
+
+void Parser::ParseConstructor(const std::string& name)
+{
+    if (Match(TokenType::IDENTIFIER))
+    {
+        Token identifier = Peek();
+        Advance();
+
+        ProgramBlock* block = nullptr;
+        std::vector<std::string> params;
+
+        if (identifier.String() == name)
+        {
             if (Match(TokenType::OPEN_PARAN))
             {
                 Advance();
 
+                const std::string function = name + "::.ctr";
+
+                params.push_back("self"); // This
+                
                 ParseParameter(params);
 
-                block = CreateProgramBlock(false, token.String(), int(params.size()));
+                block = CreateProgramBlock(false, function, int(params.size()));
 
-                const int id = GetOrCreateFunction(token.String(), block);
-                for (int i = 0; i < int(params.size()); i++)
+                // Arguments
+                const int id = DeclareFunction(function, block);
+                if (id > -1)
                 {
-                    auto& param = params[i];
-                    EmitLocal(block, param);
-                    EmitPop(block, i);
-                    EmitParameter(block, param);
+                    for (int i = 0; i < int(params.size()); i++)
+                    {
+                        auto& param = params[i];
+                        EmitLocal(block, param);
+                        EmitPop(block, i);
+                        EmitParameter(block, param);
+                    }
+                }
+                else
+                {
+                    SetError("Redefinition of " + function);
                 }
             }
             else
@@ -1400,9 +1744,9 @@ void Parser::ParseFunction()
         }
         else
         {
-            SetError("Unexpected token, expected the name of the function.");
+            SetError("Unexpected token, expected a constructor.");
         }
-    
+
         if (!IsError())
         {
             if (Match(TokenType::CLOSE_PARAN))
@@ -1412,10 +1756,17 @@ void Parser::ParseFunction()
                 if (Match(TokenType::OPEN_BRACE))
                 {
                     Advance();
-                    _frames.push(StackFrame());
-                    auto& top = _frames.top();
+                    std::string className = _frames.top()._className;
+                    auto& top = _frames.emplace();
                     PushScope();
                     top._block = block;
+                    top._className = className;
+                    top._isConstructor = true;
+
+                    // Call base
+                    const int baseId = ForwardDeclareFunction(className + "::.base");
+                    EmitPushLocal(block, 0);
+                    EmitCallD(block, baseId, 1);
 
                     for (int i = 0; i < params.size(); i++)
                     {
@@ -1423,7 +1774,7 @@ void Parser::ParseFunction()
                         top._vars.insert(std::pair<std::string, int>(param, i));
                     }
 
-                    while (!Match(TokenType::CLOSE_BRACE))
+                    while (_scanning && !Match(TokenType::CLOSE_BRACE))
                     {
                         ParseStatement();
                     }
@@ -1447,6 +1798,120 @@ void Parser::ParseFunction()
             else
             {
                 ReleaseProgramBlock(block);
+                SetError("Unexpected token, expected ')'");
+            }
+        }
+    }
+}
+
+void Parser::ParseFunction()
+{
+    if (Match(TokenType::FUNCTION))
+    {
+        Advance();
+
+        ProgramBlock* block = nullptr;
+        std::vector<std::string> params;
+
+        if (Match(TokenType::IDENTIFIER))
+        {
+            Token token = Peek();
+            Advance();
+        
+            if (Match(TokenType::OPEN_PARAN))
+            {
+                Advance();
+
+                std::string name = token.String();
+                if (_frames.top()._className.size() > 0)
+                {
+                    params.push_back("self");
+                    name = _frames.top()._className + "::" + name;
+
+                    _frames.top()._functions.push_back(token.String());
+                }
+
+                ParseParameter(params);
+
+                block = CreateProgramBlock(false, name, int(params.size()));
+
+                const int id = DeclareFunction(name, block);
+                if (id > -1)
+                {
+                    for (int i = 0; i < int(params.size()); i++)
+                    {
+                        auto& param = params[i];
+                        EmitLocal(block, param);
+                        EmitPop(block, i);
+                        EmitParameter(block, param);
+                    }
+                }
+                else
+                {
+                    SetError("Redefinition of function " + token.String());
+                }
+            }
+            else
+            {
+                SetError("Unexpected token, expected '('");
+            }
+        }
+        else
+        {
+            SetError("Unexpected token, expected the name of the function.");
+        }
+    
+        if (!IsError())
+        {
+            if (Match(TokenType::CLOSE_PARAN))
+            {
+                Advance();
+
+                if (Match(TokenType::OPEN_BRACE))
+                {
+                    Advance();
+                    std::string className = _frames.top()._className;
+                    auto& top = _frames.emplace();
+                    PushScope();
+                    top._block = block;
+                    top._className = className;
+
+                    for (int i = 0; i < params.size(); i++)
+                    {
+                        auto& param = params[i];
+                        top._vars.insert(std::pair<std::string, int>(param, i));
+                    }
+
+                    while (_scanning && !Match(TokenType::CLOSE_BRACE))
+                    {
+                        ParseStatement();
+                    }
+
+                    if (Match(TokenType::CLOSE_BRACE))
+                    {
+                        Advance();
+
+                        // If there is no top level return insert one.
+                        if (!_frames.top()._return)
+                        {
+                            EmitReturn(Block());
+                        }
+
+                        EmitProgramBlock(_program, Block());
+                        _frames.pop();
+                    }
+                    else
+                    {
+                        SetError("Unexpected token, expected '}'");
+                    }
+                }
+                else
+                {
+                    SetError("Unexpected token, expected '{'");
+                }
+            }
+            else
+            {
                 SetError("Unexpected token, expected ')'");
             }
         }
@@ -1493,32 +1958,97 @@ Expr* Parser::ParsePrimary()
     {
         Token str = Peek();
         Advance();
-        return new Expr(nullptr, nullptr, str);
+        return new Expr(nullptr, nullptr, str, ExprNode::STRING);
     }
     else if (Match(TokenType::NUMBER))
     {
         Token number = Peek();
         Advance();
-        return new Expr(nullptr, nullptr, number);
+        return new Expr(nullptr, nullptr, number, ExprNode::NUMBER);
     }
     else if (Match(TokenType::INTEGER))
     {
         Token number = Peek();
         Advance();
-        return new Expr(nullptr, nullptr, number);
+        return new Expr(nullptr, nullptr, number, ExprNode::INTEGER);
+    }
+    else if (Match(TokenType::NEW))
+    {
+        Token token = Peek();
+        Advance();
+        if (Match(TokenType::IDENTIFIER))
+        {
+            Token id = Peek();
+            Advance();
+            Expr* expr = new Expr(nullptr, nullptr, id, ExprNode::NEW);
+            expr->SetCall(new Call());
+            return expr;
+        }
+        else
+        {
+            SetError("Unexpected token.");
+        }
     }
     else if (Match(TokenType::IDENTIFIER))
     {
         Token id = Peek();
         Advance();
-        return new Expr(nullptr, nullptr, id);
+        
+        Expr* expr = new Expr(nullptr, nullptr, id, ExprNode::IDENTIFIER);
+        while (Match(TokenType::DOT))
+        {
+            Advance();
+
+            if (Match(TokenType::IDENTIFIER))
+            {
+                id = Peek();
+                Advance();
+
+                expr = new Expr(expr, nullptr, id, ExprNode::TABLE_GET);
+            }
+            else
+            {
+                FreeExpr(expr);
+                SetError("Unexpected token.");
+                break;
+            }
+        }
+
+        return expr;
+    }
+    else if (Match(TokenType::SELF))
+    {
+        Token self = Peek();
+        Advance();
+
+        Expr* expr = new Expr(nullptr, nullptr, self, ExprNode::SELF);
+        while (Match(TokenType::DOT))
+        {
+            Advance();
+
+            if (Match(TokenType::IDENTIFIER))
+            {
+                Token id = Peek();
+                Advance();
+
+                expr = new Expr(expr, nullptr, id, ExprNode::TABLE_GET);
+            }
+            else
+            {
+                FreeExpr(expr);
+                SetError("Unexpected token.");
+                break;
+            }
+        }
+
+        return expr;
     }
     else if (Match(TokenType::OPEN_PARAN))
     {
         Advance();
         Expr* expr = ParseExpression();
 
-        bool cont = Match(TokenType::CLOSE_PARAN);
+        const bool cont = Match(TokenType::CLOSE_PARAN);
         if (cont)
         {
             Advance();
@@ -1526,7 +2056,7 @@ Expr* Parser::ParsePrimary()
         }
         else
         {
-            delete expr;
+            FreeExpr(expr);
             SetError("Unexpected token.");
         }
     }
@@ -1536,12 +2066,19 @@ Expr* Parser::ParsePrimary()
 
 Expr* Parser::ParseUnary()
 {
-    if (Match(TokenType::MINUS) || Match(TokenType::NOT))
+    if (Match(TokenType::MINUS))
     {
         Token op = Peek();
         Advance();
         Expr* right = ParseUnary();
-        return new Expr(nullptr, right, op);
+        return new Expr(nullptr, right, op, ExprNode::SUB);
+    }
+    else if (Match(TokenType::NOT))
+    {
+        Token op = Peek();
+        Advance();
+        Expr* right = ParseUnary();
+        return new Expr(nullptr, right, op, ExprNode::NOT);
     }
 
     return ParseCall();
@@ -1555,7 +2092,7 @@ Expr* Parser::ParseFactor()
     {
         Token op = Peek();
         Advance();
-        expr = new Expr(expr, ParseUnary(), op);
+        expr = new Expr(expr, ParseUnary(), op, op.Type() == TokenType::SLASH ? ExprNode::DIV : ExprNode::MUL);
     }
 
     return expr;
@@ -1569,7 +2106,7 @@ Expr* Parser::ParseTerm()
     {
         Token op = Peek();
         Advance();
-        expr = new Expr(expr, ParseFactor(), op);
+        expr = new Expr(expr, ParseFactor(), op, op.Type() == TokenType::PLUS ? ExprNode::ADD : ExprNode::SUB);
     }
 
     return expr;
@@ -1583,7 +2120,7 @@ Expr* Parser::ParseLogicalAnd()
     {
         Token op = Peek();
         Advance();
-        expr = new Expr(expr, ParseEquality(), op);
+        expr = new Expr(expr, ParseEquality(), op, ExprNode::AND);
     }
 
     return expr;
@@ -1597,7 +2134,7 @@ Expr* Parser::ParseLogicalOr()
     {
         Token op = Peek();
         Advance();
-        expr = new Expr(expr, ParseLogicalAnd(), op);
+        expr = new Expr(expr, ParseLogicalAnd(), op, ExprNode::OR);
     }
 
     return expr;
@@ -1611,7 +2148,25 @@ Expr* Parser::ParseComparision()
     {
         Token op = Peek();
         Advance();
-        expr = new Expr(expr, ParseTerm(), op);
+
+        ExprNode node;
+        switch (op.Type())
+        {
+        case TokenType::GREATER:
+            node = ExprNode::GREATER;
+            break;
+        case TokenType::GREATER_EQUALS:
+            node = ExprNode::GREATER_EQUALS;
+            break;
+        case TokenType::LESS:
+            node = ExprNode::LESS;
+            break;
+        case TokenType::LESS_EQUALS:
+            node = ExprNode::LESS_EQUALS;
+            break;
+        }
+
+        expr = new Expr(expr, ParseTerm(), op, node);
     }
 
     return expr;
@@ -1624,8 +2179,20 @@ Expr* Parser::ParseEquality()
     {
         Token equals = Peek();
         Advance();
+
+        ExprNode node;
+        switch (equals.Type())
+        {
+        case TokenType::EQUALS_EQUALS:
+            node = ExprNode::EQUALS_EQUALS;
+            break;
+        case TokenType::NOT_EQUALS:
+            node = ExprNode::NOT_EQUALS;
+            break;
+        }
+
         Expr* right = ParseComparision();
-        expr = new Expr(expr, right, equals);
+        expr = new Expr(expr, right, equals, node);
     }
 
     return expr;
@@ -1702,21 +2269,64 @@ void Parser::ParseAssignmentStatement()
         const auto& var = frame._vars.find(identifier.String());
         if (var != frame._vars.end())
         {
-            Expr* expr = ParseAssignment();
-
-            if (Match(TokenType::SEMICOLON))
+            Expr* lhs = ParseAssignmentLhs();
+            if (Match(TokenType::OPEN_PARAN))
             {
-                Advance();
+                // Function call
 
-                EmitExpr(expr);
-                EmitPop(Block(), var->second);
+                Advance();
+                Call* call = ParseArgument();
+                lhs->SetCall(call);
+
+                if (Match(TokenType::CLOSE_PARAN))
+                {
+                    Advance();
+                }
+                else
+                {
+                    SetError("Unexpected token.");
+                }
+
+                if (Match(TokenType::SEMICOLON))
+                {
+                    Advance();
+
+                    lhs->GetCall()->SetDiscard();
+
+                    EmitExpr(lhs);
+                }
+                else
+                {
+                    SetError("Unexpected token.");
+                }
             }
             else
             {
-                SetError("Unexpected token.");
-            }
+                Expr* expr = ParseAssignment(lhs);
 
-            FreeExpr(expr);
+                if (Match(TokenType::SEMICOLON))
+                {
+                    Advance();
+
+                    EmitExpr(expr);
+
+                    if (lhs->Node() == ExprNode::IDENTIFIER)
+                    {
+                        EmitPop(Block(), var->second);
+                    }
+                    else
+                    {
+                        EmitExpr(lhs);
+                    }
+                }
+                else
+                {
+                    SetError("Unexpected token.");
+                }
+
+                FreeExpr(expr);
+            }
+            FreeExpr(lhs);
         }
         else
         {
@@ -1749,19 +2359,70 @@ void Parser::ParseAssignmentStatement()
     }
 }
 
-Expr* Parser::ParseAssignment()
+Expr* Parser::ParseAssignmentLhs()
 {
     Token identifier = Peek();
     Advance();
     
-    const auto& it = _frames.top()._vars.find(identifier.String());
+    Expr* expr = nullptr;
 
-    if (it == _frames.top()._vars.end())
+    if (identifier.Type() == TokenType::SELF)
     {
-        SetError("Undefined variable '" + identifier.String() + "'");
-        return nullptr;
+        expr = new Expr(nullptr, nullptr, identifier, ExprNode::SELF);
+
+        if (!Match(TokenType::DOT))
+        {
+            SetError("Unexpected token");
+        }
+    }
+    else if (identifier.Type() == TokenType::IDENTIFIER)
+    {
+        const auto& it = _frames.top()._vars.find(identifier.String());
+
+        if (it == _frames.top()._vars.end())
+        {
+            SetError("Undefined variable '" + identifier.String() + "'");
+            return nullptr;
+        }
+
+        expr = new Expr(nullptr, nullptr, identifier, ExprNode::IDENTIFIER);
     }
 
+    if (Match(TokenType::DOT))
+    {
+        while (Match(TokenType::DOT))
+        {
+            Advance();
+            
+            if (Match(TokenType::IDENTIFIER))
+            {
+                identifier = Peek();
+                Advance();
+
+                if (Match(TokenType::DOT) || Match(TokenType::OPEN_PARAN))
+                {
+                    expr = new Expr(expr, nullptr, identifier, ExprNode::TABLE_GET);
+                }
+                else
+                {
+                    expr = new Expr(expr, nullptr, identifier, ExprNode::TABLE_SET);
+                }
+            }
+            else
+            {
+                SetError("Undefined variable '" + identifier.String() + "'");
+                return nullptr;
+            }
+        }
+
+        return expr;
+    }
+
+    return expr;
+}
+
+Expr* Parser::ParseAssignment(Expr* lhs)
+{
     Token op = Peek();
     Expr* expr = nullptr;
     if (Match(TokenType::EQUALS))
@@ -1772,12 +2433,12 @@ Expr* Parser::ParseAssignment()
     else if (Match(TokenType::INCREMENT))
     {
         Advance();
-        expr = new Expr(new Expr(nullptr, nullptr, identifier), nullptr, op);
+        expr = new Expr(lhs->Clone(), nullptr, op, ExprNode::INCREMENT);
     }
     else if (Match(TokenType::DECREMENT))
     {
         Advance();
-        expr = new Expr(new Expr(nullptr, nullptr, identifier), nullptr, op);
+        expr = new Expr(lhs->Clone(), nullptr, op, ExprNode::DECREMENT);
     }
     else if (Match(TokenType::PLUS_EQUALS) ||
         Match(TokenType::MINUS_EQUALS) ||
@@ -1786,24 +2447,38 @@ Expr* Parser::ParseAssignment()
     {
         Advance();
 
-        TokenType type;
+        ExprNode type;
         switch (op.Type())
         {
         case TokenType::MINUS_EQUALS:
-            type = TokenType::MINUS;
+            type = ExprNode::SUB;
             break;
         case TokenType::PLUS_EQUALS:
-            type = TokenType::PLUS;
+            type = ExprNode::ADD;
             break;
         case TokenType::STAR_EQUALS:
-            type = TokenType::STAR;
+            type = ExprNode::MUL;
             break;
         case TokenType::SLASH_EQUALS:
-            type = TokenType::SLASH;
+            type = ExprNode::DIV;
             break;
         }
 
-        expr = new Expr(new Expr(nullptr, nullptr, identifier), ParseExpression(), Token(type, op.String(), op.Line()));
+        Expr* left = nullptr;
+        if (lhs->Left())
+        {
+            left = lhs->Left()->Clone();
+        }
+
+        Expr* right = nullptr;
+        if (lhs->Right())
+        {
+            right = lhs->Right()->Clone();
+        }
+
+        Expr* clone = new Expr(left, right, lhs->Op(),
+            lhs ->Node() == ExprNode::TABLE_SET ? ExprNode::TABLE_GET : lhs->Node());
+        expr = new Expr(clone, ParseExpression(), op, type);
     }
     else
     {
@@ -1963,58 +2638,61 @@ void Parser::ParseFor()
             SetError("Unexpected token.");
         }
 
-        Token left = Peek();
-        Expr* third = ParseAssignment();
-
-        if (Match(TokenType::CLOSE_PARAN))
+        if (!IsError())
         {
-            Advance();
-        }
-        else
-        {
-            SetError("Unexcepted token.");
-        }
+            Token left = Peek();
+            Expr* third = ParseAssignment(ParseAssignmentLhs());
 
-        if (!IsError() && Match(TokenType::OPEN_BRACE))
-        {
-            Advance();
-
-            // Before loop body
-
-            Branch br;
-            MarkLabel(Block(), &br.startLabel);
-
-            if (second)
+            if (Match(TokenType::CLOSE_PARAN))
             {
-                br.graph.BuildFlowGraph(second);
-                EmitFlowGraph(br.graph, Block());
+                Advance();
+            }
+            else
+            {
+                SetError("Unexcepted token.");
             }
 
-            // Loop body
-            ParseStatementBlock();
-
-            // After loop
-            if (third)
+            if (!IsError() && Match(TokenType::OPEN_BRACE))
             {
-                auto& frame = _frames.top();
+                Advance();
 
-                EmitExpr(third);
-                EmitPop(Block(), frame._vars[left.String()]);
-                FreeExpr(third);
-            }
+                // Before loop body
 
-            PopScope();
+                Branch br;
+                MarkLabel(Block(), &br.startLabel);
 
-            SunScript::ProgramBlock* prog = Block();
+                if (second)
+                {
+                    br.graph.BuildFlowGraph(second);
+                    EmitFlowGraph(br.graph, Block());
+                }
 
-            EmitJump(prog, JUMP, &br.startLabel);   // Unconditionally jump to start of loop.
-            EmitMarkedLabel(prog, &br.startLabel);
-            EmitLabel(prog, &br.endLabel);
+                // Loop body
+                ParseStatementBlock();
 
-            if (second)
-            {
-                EmitLabel(prog, br.graph.Failure());
-                FreeExpr(second);
+                // After loop
+                if (third)
+                {
+                    auto& frame = _frames.top();
+
+                    EmitExpr(third);
+                    EmitPop(Block(), frame._vars[left.String()]);
+                    FreeExpr(third);
+                }
+
+                PopScope();
+
+                SunScript::ProgramBlock* prog = Block();
+
+                EmitJump(prog, JUMP, &br.startLabel);   // Unconditionally jump to start of loop.
+                EmitMarkedLabel(prog, &br.startLabel);
+                EmitLabel(prog, &br.endLabel);
+
+                if (second)
+                {
+                    EmitLabel(prog, br.graph.Failure());
+                    FreeExpr(second);
+                }
             }
         }
     }
@@ -2116,6 +2794,12 @@ void Parser::ParseStatement()
         break;
     case TokenType::IDENTIFIER:
         ParseAssignmentStatement();
+        break;
+    case TokenType::CLASS:
+        ParseClass();
+        break;
+    case TokenType::SELF:
+        ParseSelf();
         break;
     default:
         SetError("Unexpected token.");
@@ -2457,6 +3141,11 @@ void SunScript::CompileFile(const std::string& filepath,
             {
                 std::cout << "Running Demo6()" << std::endl;
                 SunScript::Demo6();
+            }
+            else if (cmd == "demo7")
+            {
+                std::cout << "Running Demo7()" << std::endl;
+                SunScript::Demo7();
             }
             else
             {

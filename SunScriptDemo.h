@@ -8,4 +8,5 @@ namespace SunScript
     void Demo4();
     void Demo5();
     void Demo6();
+    void Demo7();
 }

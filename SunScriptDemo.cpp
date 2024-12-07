@@ -43,6 +43,8 @@ void SunScript::Demo1(int _42)
     auto _block = CreateProgramBlock(true, "main", 0);
     SunScript::Label label;
 
+    SunScript::EmitBuildFlags(_program, BUILD_FLAG_DOUBLE);
+
     SunScript::EmitPush(_block, "Hello, from sunbeam.");
     SunScript::EmitCall(_block, print, 1);
     SunScript::EmitPush(_block, 42);
@@ -86,6 +88,8 @@ void SunScript::Demo2()
     int print = CreateFunction(_program);
     auto _block = CreateProgramBlock(true, "main", 0);
 
+    SunScript::EmitBuildFlags(_program, BUILD_FLAG_DOUBLE);
+
     Label label;
 
     SunScript::EmitPush(_block, 11);
@@ -126,6 +130,8 @@ void SunScript::Demo3()
     int main = CreateFunction(_program);
     int print = CreateFunction(_program);
     auto _block = CreateProgramBlock(true, "main", 0);
+
+    SunScript::EmitBuildFlags(_program, BUILD_FLAG_DOUBLE);
 
     Label loopStart;
     Label loopEnd;
@@ -311,4 +317,46 @@ void SunScript::Demo6()
     ss << "}" << std::endl;
 
     RunDemoScript("Demo6.txt", ss.str(), true);
+}
+
+void SunScript::Demo7()
+{
+    auto _program = CreateProgram();
+    int main = CreateFunction(_program);
+    int print = CreateFunction(_program);
+    auto _block = CreateProgramBlock(true, "main", 0);
+
+    const int test = 0;
+
+    SunScript::EmitBuildFlags(_program, BUILD_FLAG_DOUBLE);
+
+    SunScript::EmitLocal(_block, "test");
+    SunScript::EmitTableNew(_block);
+    SunScript::EmitPop(_block, test);
+    SunScript::EmitPush(_block, 10);
+    SunScript::EmitPushLocal(_block, test);
+    SunScript::EmitTableSet(_block, "foo");
+    SunScript::EmitPushLocal(_block, test);
+    SunScript::EmitTableGet(_block, "foo");
+    SunScript::EmitCallD(_block, print, 1);
+
+    SunScript::EmitDone(_block);
+    SunScript::EmitProgramBlock(_program, _block);
+
+    SunScript::EmitInternalFunction(_program, _block, main);
+    SunScript::EmitExternalFunction(_program, print, "Print");
+    SunScript::FlushBlocks(_program);
+
+    unsigned char* programData;
+    const int programSize = GetProgram(_program, &programData);
+
+    VirtualMachine* vm = CreateVirtualMachine();
+    SetHandler(vm, Handler);
+    LoadProgram(vm, programData, programSize);
+    RunScript(vm);
+
+    delete[] programData;
+    ShutdownVirtualMachine(vm);
+    ReleaseProgram(_program);
+    ReleaseProgramBlock(_block);
 }

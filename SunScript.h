@@ -14,11 +14,13 @@ namespace SunScript
     constexpr unsigned char OP_YIELD = 0x3;
     constexpr unsigned char OP_LOCAL = 0x4;
     constexpr unsigned char OP_SET = 0x5;
-    constexpr unsigned char OP_CALLX = 0x6;
+    constexpr unsigned char OP_CALLD = 0x6;
 
     constexpr unsigned char OP_DONE = 0x8;
     constexpr unsigned char OP_PUSH_LOCAL = 0x9;
-
+    constexpr unsigned char OP_TABLE_NEW = 0xa;
+    constexpr unsigned char OP_TABLE_GET = 0xb;
+    constexpr unsigned char OP_TABLE_SET = 0xc;
     constexpr unsigned char OP_UNARY_MINUS = 0xd;
     constexpr unsigned char OP_INCREMENT = 0xe;
     constexpr unsigned char OP_DECREMENT = 0xf;
@@ -27,10 +29,14 @@ namespace SunScript
     constexpr unsigned char OP_MUL = 0x1b;
     constexpr unsigned char OP_DIV = 0x1c;
 
+    constexpr unsigned char OP_DUP = 0x20;
+    constexpr unsigned char OP_PUSH_FUNC = 0x21;
     constexpr unsigned char OP_FORMAT = 0x22;
     constexpr unsigned char OP_JUMP = 0x23;
     constexpr unsigned char OP_CMP = 0x24;
     constexpr unsigned char OP_RETURN = 0x25;
+    constexpr unsigned char OP_CALLO = 0x26;
+    constexpr unsigned char OP_CALLM = 0x27;
 
     constexpr unsigned char OP_LSPUSH = OP_PUSH | MK_LOOPSTART;
     constexpr unsigned char OP_LSPOP = OP_POP | MK_LOOPSTART;
@@ -51,6 +57,7 @@ namespace SunScript
     constexpr unsigned char TY_STRING = 0x2;
     constexpr unsigned char TY_REAL = 0x3;
     constexpr unsigned char TY_OBJECT = 0x4;
+    constexpr unsigned char TY_FUNC = 0x5;
 
     constexpr unsigned char JUMP = 0x0;
     constexpr unsigned char JUMP_E = 0x1;
@@ -368,9 +375,15 @@ namespace SunScript
 
     void EmitPop(ProgramBlock* program, unsigned char local);
 
+    void EmitPushDelegate(ProgramBlock* program, int func);
+
     void EmitYield(ProgramBlock* program, int func, unsigned char numArgs);
 
-    void EmitCallX(ProgramBlock* program, int func, unsigned char numArgs);
+    void EmitCallD(ProgramBlock* program, int func, unsigned char numArgs);
+
+    void EmitCallO(ProgramBlock* program, unsigned char numArgs);
+
+    void EmitCallM(ProgramBlock* program, unsigned char numArgs);
 
     void EmitCall(ProgramBlock* program, int func, unsigned char numArgs);
 
@@ -399,6 +412,14 @@ namespace SunScript
     void EmitCompare(ProgramBlock* program);
 
     void EmitJump(ProgramBlock* program, char type, Label* label);
+
+    void EmitTableNew(ProgramBlock* program);
+
+    void EmitTableGet(ProgramBlock* program, const std::string& name);
+
+    void EmitTableSet(ProgramBlock* program, const std::string& name);
+
+    void EmitDup(ProgramBlock* program);
 
     void EmitDone(ProgramBlock* program);
 

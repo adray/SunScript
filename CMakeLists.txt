@@ -27,6 +27,7 @@ set (SUN_TESTS
     "Tests/Optimize.txt"
     "Tests/Phi.txt"
     "Tests/Spill.txt"
+    "Tests/Vector.txt"
 )
 
 project ("Sun")

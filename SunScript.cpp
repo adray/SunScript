@@ -502,6 +502,11 @@ namespace SunScript
         }
     };
 
+    struct Table
+    {
+        std::unordered_map<std::string, void*> _data;
+    };
+
     struct VirtualMachine
     {
         unsigned char* program;
@@ -2256,12 +2261,72 @@ static void Op_Call(VirtualMachine* vm, bool discard)
             vm->running = false;
             vm->statusCode = VM_ERROR;
         }
-    }    
+    }
 }
 
-static void Op_CallX(VirtualMachine* vm)
+static void OP_CallD(VirtualMachine* vm)
 {
     Op_Call(vm, true);
+}
+
+static void OP_CallO(VirtualMachine* vm, bool discard)
+{
+    if (vm->stack.size() < 1)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    void* const value = vm->stack.top();
+    vm->stack.pop();
+
+    if (vm->mm.GetType(value) != TY_FUNC)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    const unsigned char numArgs = Read_Byte(vm->program, &vm->programCounter);
+    auto& func = vm->functions[*(int*)value];
+    
+    vm->callName = func.name;
+    vm->callNumArgs = numArgs;
+
+    if (func.blk != -1)
+    {
+        auto& blk = vm->blocks[func.blk];
+        if (blk.numArgs == numArgs)
+        {
+            const int address = blk.info.pc + vm->programOffset;
+            StackFrame& frame = vm->frames.emplace_back();
+            frame.functionName = vm->callName;
+            frame.debugLine = vm->debugLine;
+            frame.func = &blk.info;
+            CreateStackFrame(vm, frame, numArgs, int(blk.info.locals.size()));
+            vm->programCounter = address;
+            vm->discard = discard;
+
+            if (vm->tracing)
+            {
+                Trace_Abort(vm);
+            }
+
+            blk.info.counter++;
+            blk.info.depth++;
+        }
+        else
+        {
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
+        }
+    }
+    else
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+    }
 }
 
 static void Op_Yield(VirtualMachine* vm)
@@ -3156,6 +3221,117 @@ static void Op_Compare(VirtualMachine* vm)
     }
 }
 
+static void Op_TableNew(VirtualMachine* vm)
+{
+    void* table = vm->mm.New(sizeof(Table), TY_OBJECT);
+    void* ptr = new(table) Table;
+    vm->stack.push(ptr);
+
+    if (vm->tracing) {
+        Trace_Abort(vm);
+    }
+}
+
+static void Op_TableGet(VirtualMachine* vm)
+{
+    if (vm->stack.size() == 0)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    void* top = vm->stack.top();
+    vm->stack.pop();
+
+    if (vm->mm.GetType(top) != TY_OBJECT)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    char* name = Read_String(vm->program, &vm->programCounter);
+
+    Table* tbl = reinterpret_cast<Table*>(top);
+    const auto& it = tbl->_data.find(name);
+    if (it == tbl->_data.end())
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    vm->stack.push(it->second);
+
+    if (vm->tracing) {
+        Trace_Abort(vm);
+    }
+}
+
+static void Op_TableSet(VirtualMachine* vm)
+{
+    if (vm->stack.size() < 2)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    void* top = vm->stack.top();
+    vm->stack.pop();
+
+    void* next = vm->stack.top();
+    vm->stack.pop();
+
+    if (vm->mm.GetType(top) != TY_OBJECT)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+    
+    char* name = Read_String(vm->program, &vm->programCounter);
+
+    Table* tbl = reinterpret_cast<Table*>(top);
+
+    tbl->_data[name] = next;
+
+    if (vm->tracing) {
+        Trace_Abort(vm);
+    }
+}
+
+static void Op_Dup(VirtualMachine* vm)
+{
+    if (vm->stack.size() < 1)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    void* top = vm->stack.top();
+    vm->stack.push(top);
+
+    if (vm->tracing) {
+        Trace_Abort(vm);
+    }
+}
+
+static void Op_Push_Func(VirtualMachine* vm)
+{
+    const int value = Read_Int(vm->program, &vm->programCounter);
+
+    int* data = reinterpret_cast<int*>(vm->mm.New(sizeof(int), TY_FUNC));
+    *data = value;
+    vm->stack.push(data);
+
+    if (vm->tracing) {
+        Trace_Abort(vm);
+    }
+}
+
 static void ResetVM(VirtualMachine* vm)
 {
     vm->mm.Reset();
@@ -3382,14 +3558,26 @@ static int ResumeScript2(VirtualMachine* vm)
         case OP_SET:
             Op_Set(vm);
             break;
+        case OP_DUP:
+            Op_Dup(vm);
+            break;
         case OP_POP:
             Op_Pop(vm);
+            break;
+        case OP_PUSH_FUNC:
+            Op_Push_Func(vm);
             break;
         case OP_CALL:
             Op_Call(vm, false);
             break;
-        case OP_CALLX:
-            Op_CallX(vm);
+        case OP_CALLD:
+            OP_CallD(vm);
+            break;
+        case OP_CALLO:
+            OP_CallO(vm, false);
+            break;
+        case OP_CALLM:
+            OP_CallO(vm, true);
             break;
         case OP_DONE:
             if (vm->statusCode == VM_OK)
@@ -3410,6 +3598,15 @@ static int ResumeScript2(VirtualMachine* vm)
             break;
         case OP_JUMP:
             Op_Jump(vm);
+            break;
+        case OP_TABLE_NEW:
+            Op_TableNew(vm);
+            break;
+        case OP_TABLE_GET:
+            Op_TableGet(vm);
+            break;
+        case OP_TABLE_SET:
+            Op_TableSet(vm);
             break;
         case OP_ADD:
         case OP_SUB:
@@ -4028,6 +4225,15 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
         case OP_DIV:
             ss << "OP_DIV" << std::endl;
             break;
+        case OP_TABLE_NEW:
+            ss << "OP_TABLE_NEW" << std::endl;
+            break;
+        case OP_TABLE_GET:
+            ss << "OP_TABLE_GET " << Read_String(programData, &vm->programCounter) << std::endl;
+            break;
+        case OP_TABLE_SET:
+            ss << "OP_TABLE_SET " << Read_String(programData, &vm->programCounter) << std::endl;
+            break;
         case OP_CMP:
             ss << "OP_CMP" << std::endl;
             break;
@@ -4073,17 +4279,33 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             }
         }
             break;
+        case OP_PUSH_FUNC:
+            ss << "OP_PUSH_FUNC " << Read_Int(programData, &vm->programCounter) << std::endl;
+            break;
         case OP_YIELD:
             ss << "OP_YIELD " << Read_String(programData, &vm->programCounter) << std::endl;
+            break;
+        case OP_DUP:
+            ss << "OP_DUP " << std::endl;
             break;
         case OP_CALL:
             ss << "OP_CALL " << int(Read_Byte(programData, &vm->programCounter)) << " " << Read_Int(programData, &vm->programCounter) << std::endl;
             break;
-        case OP_CALLX:
-            ss << "OP_CALLX " << int(Read_Byte(programData, &vm->programCounter)) << " " << Read_Int(programData, &vm->programCounter) << std::endl;
+        case OP_CALLD:
+            ss << "OP_CALLD " << int(Read_Byte(programData, &vm->programCounter)) << " " << Read_Int(programData, &vm->programCounter) << std::endl;
+            break;
+        case OP_CALLO:
+            ss << "OP_CALLO " << int(Read_Byte(programData, &vm->programCounter)) << std::endl;
+            break;
+        case OP_CALLM:
+            ss << "OP_CALLM " << int(Read_Byte(programData, &vm->programCounter)) << std::endl;
             break;
         case OP_DONE:
             ss << "OP_DONE" << std::endl;
+            vm->running = false;
+            break;
+        default:
+            ss << "Error: malformed bytecode." << std::endl;
             vm->running = false;
             break;
         }
@@ -4236,6 +4458,12 @@ void SunScript::EmitPop(ProgramBlock* program, unsigned char local)
     program->data.push_back(local);
 }
 
+void SunScript::EmitPushDelegate(ProgramBlock* program, int func)
+{
+    program->data.push_back(OP_PUSH_FUNC);
+    EmitInt(program->data, func);
+}
+
 void SunScript::EmitYield(ProgramBlock* program, int func, unsigned char numArgs)
 {
     program->data.push_back(OP_YIELD);
@@ -4243,9 +4471,9 @@ void SunScript::EmitYield(ProgramBlock* program, int func, unsigned char numArgs
     EmitInt(program->data, func);
 }
 
-void SunScript::EmitCallX(ProgramBlock* program, int func, unsigned char numArgs)
+void SunScript::EmitCallD(ProgramBlock* program, int func, unsigned char numArgs)
 {
-    program->data.push_back(OP_CALLX);
+    program->data.push_back(OP_CALLD);
     program->data.push_back(numArgs);
     EmitInt(program->data, func);
 }
@@ -4255,6 +4483,18 @@ void SunScript::EmitCall(ProgramBlock* program, int func, unsigned char numArgs)
     program->data.push_back(OP_CALL);
     program->data.push_back(numArgs);
     EmitInt(program->data, func);
+}
+
+void SunScript::EmitCallO(ProgramBlock* program, unsigned char numArgs)
+{
+    program->data.push_back(OP_CALLO);
+    program->data.push_back(numArgs);
+}
+
+void SunScript::EmitCallM(ProgramBlock* program, unsigned char numArgs)
+{
+    program->data.push_back(OP_CALLM);
+    program->data.push_back(numArgs);
 }
 
 void SunScript::EmitAdd(ProgramBlock* program)
@@ -4337,6 +4577,28 @@ void SunScript::EmitJump(ProgramBlock* program, char type, Label* label)
     program->data.push_back(0);
 
     label->jumps.push_back(int(program->data.size()) - 2);
+}
+
+void SunScript::EmitTableNew(ProgramBlock* program)
+{
+    program->data.push_back(OP_TABLE_NEW);
+}
+
+void SunScript::EmitTableGet(ProgramBlock* program, const std::string& name)
+{
+    program->data.push_back(OP_TABLE_GET);
+    EmitString(program->data, name);
+}
+
+void SunScript::EmitTableSet(ProgramBlock* program, const std::string& name)
+{
+    program->data.push_back(OP_TABLE_SET);
+    EmitString(program->data, name);
+}
+
+void SunScript::EmitDup(ProgramBlock* program)
+{
+    program->data.push_back(OP_DUP);
 }
 
 void SunScript::EmitDone(ProgramBlock* program)
