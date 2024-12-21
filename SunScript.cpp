@@ -504,7 +504,8 @@ namespace SunScript
 
     struct Table
     {
-        std::unordered_map<std::string, void*> _data;
+        std::unordered_map<std::string, void*> _map;
+        std::vector<void*> _array;
     };
 
     struct VirtualMachine
@@ -1833,9 +1834,9 @@ Callstack* SunScript::GetCallStack(VirtualMachine* vm)
     size_t id = vm->frames.size();
     int pc = vm->programCounter;
     int debugLine = vm->debugLine;
-    while (id > 1)
+    while (id > 0)
     {
-        auto& frame = vm->frames[id];
+        auto& frame = vm->frames[id-1];
         tail->functionName = frame.functionName;
         tail->numArgs = int(frame.func->parameters.size());
         tail->debugLine = debugLine;
@@ -3234,12 +3235,24 @@ static void Op_TableNew(VirtualMachine* vm)
 
 static void Op_TableGet(VirtualMachine* vm)
 {
-    if (vm->stack.size() == 0)
+    if (vm->stack.size() < 3)
     {
         vm->running = false;
         vm->statusCode = VM_ERROR;
         return;
     }
+
+    void* type = vm->stack.top();
+    vm->stack.pop();
+    if (vm->mm.GetType(type) != TY_INT)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    void* identifier = vm->stack.top();
+    vm->stack.pop();
 
     void* top = vm->stack.top();
     vm->stack.pop();
@@ -3251,18 +3264,41 @@ static void Op_TableGet(VirtualMachine* vm)
         return;
     }
 
-    char* name = Read_String(vm->program, &vm->programCounter);
-
     Table* tbl = reinterpret_cast<Table*>(top);
-    const auto& it = tbl->_data.find(name);
-    if (it == tbl->_data.end())
+    switch (*(int*)type)
     {
+    case TY_INT:
+    {
+        const int key = *(int*)identifier;
+        if (key >= 0 && key < tbl->_array.size())
+        {
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
+            return;
+        }
+
+        vm->stack.push(tbl->_array[key]);
+    }
+        break;
+    case TY_STRING:
+    {
+        char* name = (char*)identifier;
+        const auto& it = tbl->_map.find(name);
+        if (it == tbl->_map.end())
+        {
+            vm->running = false;
+            vm->statusCode = VM_ERROR;
+            return;
+        }
+
+        vm->stack.push(it->second);
+    }
+        break;
+    default:
         vm->running = false;
         vm->statusCode = VM_ERROR;
-        return;
+        break;
     }
-
-    vm->stack.push(it->second);
 
     if (vm->tracing) {
         Trace_Abort(vm);
@@ -3271,12 +3307,24 @@ static void Op_TableGet(VirtualMachine* vm)
 
 static void Op_TableSet(VirtualMachine* vm)
 {
-    if (vm->stack.size() < 2)
+    if (vm->stack.size() < 4)
     {
         vm->running = false;
         vm->statusCode = VM_ERROR;
         return;
     }
+
+    void* type = vm->stack.top();
+    vm->stack.pop();
+    if (vm->mm.GetType(type) != TY_INT)
+    {
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        return;
+    }
+
+    void* identifier = vm->stack.top();
+    vm->stack.pop();
 
     void* top = vm->stack.top();
     vm->stack.pop();
@@ -3291,11 +3339,30 @@ static void Op_TableSet(VirtualMachine* vm)
         return;
     }
     
-    char* name = Read_String(vm->program, &vm->programCounter);
-
     Table* tbl = reinterpret_cast<Table*>(top);
-
-    tbl->_data[name] = next;
+    switch (*(int*)type)
+    {
+    case TY_STRING:
+    {
+        const char* name = (char*)identifier;
+        tbl->_map[name] = next;
+    }
+        break;
+    case TY_INT:
+    {
+        const int key = *(int*)identifier;
+        if (key >= tbl->_array.size())
+        {
+            tbl->_array.resize(key + 1);
+        }
+        tbl->_array[key] = next;
+    }
+        break;
+    default:
+        vm->running = false;
+        vm->statusCode = VM_ERROR;
+        break;
+    }
 
     if (vm->tracing) {
         Trace_Abort(vm);
@@ -4229,10 +4296,10 @@ void SunScript::Disassemble(std::stringstream& ss, unsigned char* programData, u
             ss << "OP_TABLE_NEW" << std::endl;
             break;
         case OP_TABLE_GET:
-            ss << "OP_TABLE_GET " << Read_String(programData, &vm->programCounter) << std::endl;
+            ss << "OP_TABLE_GET " << std::endl;
             break;
         case OP_TABLE_SET:
-            ss << "OP_TABLE_SET " << Read_String(programData, &vm->programCounter) << std::endl;
+            ss << "OP_TABLE_SET " << std::endl;
             break;
         case OP_CMP:
             ss << "OP_CMP" << std::endl;
@@ -4584,16 +4651,14 @@ void SunScript::EmitTableNew(ProgramBlock* program)
     program->data.push_back(OP_TABLE_NEW);
 }
 
-void SunScript::EmitTableGet(ProgramBlock* program, const std::string& name)
+void SunScript::EmitTableGet(ProgramBlock* program)
 {
     program->data.push_back(OP_TABLE_GET);
-    EmitString(program->data, name);
 }
 
-void SunScript::EmitTableSet(ProgramBlock* program, const std::string& name)
+void SunScript::EmitTableSet(ProgramBlock* program)
 {
     program->data.push_back(OP_TABLE_SET);
-    EmitString(program->data, name);
 }
 
 void SunScript::EmitDup(ProgramBlock* program)

@@ -22,6 +22,7 @@ set (SUN_TESTS
     "Tests/Factorial.txt"
     "Tests/ForLoop.txt"
     "Tests/Guard.txt"
+    "Tests/List.txt"
     "Tests/LoopTest.txt"
     "Tests/NestedLoop.txt"
     "Tests/Optimize.txt"

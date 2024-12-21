@@ -18,6 +18,8 @@ enum class TokenType
     CLOSE_PARAN,
     OPEN_BRACE,
     CLOSE_BRACE,
+    OPEN_BRACKET,
+    CLOSE_BRACKET,
     PLUS,
     MINUS,
     STAR,
@@ -399,6 +401,14 @@ void Scanner::ScanLine(const std::string& line)
                 AddToken(TokenType::CLOSE_BRACE);
                 Advance();
                 break;
+            case '[':
+                AddToken(TokenType::OPEN_BRACKET);
+                Advance();
+                break;
+            case ']':
+                AddToken(TokenType::CLOSE_BRACKET);
+                Advance();
+                break;
             case '+':
                 Advance();
                 if (Peek() == '+') { Advance(); AddToken(TokenType::INCREMENT); }
@@ -532,7 +542,9 @@ enum class ExprNode
     IDENTIFIER,
     TABLE_GET,
     TABLE_SET,
-    CALL_DELEGATE
+    ARRAY,
+    ARRAY_GET,
+    ARRAY_SET
 };
 
 //===================
@@ -872,6 +884,7 @@ private:
     void ParseParameter(std::vector<std::string>& params);
     void ParseClass();
     void ParseSelf();
+    Expr* ParseArray();
     Expr* ParseExprStatement();
     Expr* ParseExpression();
     Expr* ParseEquality();
@@ -1254,7 +1267,9 @@ void Parser::EmitExpr(Expr* expr)
 
             EmitExpr(expr->Left());
             EmitDup(block);
-            EmitTableGet(block, expr->Op().String());
+            EmitPush(block, expr->Op().String());
+            EmitPush(block, TY_STRING);
+            EmitTableGet(block);
 
             if (call->Discard())
             {
@@ -1344,11 +1359,26 @@ void Parser::EmitExpr(Expr* expr)
             EmitCallD(block, id, 1);
         }
         break;
+    case ExprNode::ARRAY:
+        EmitTableNew(block);
+        break;
+    case ExprNode::ARRAY_GET:
+        EmitPush(block, TY_INT);
+        EmitTableGet(block);
+        break;
+    case ExprNode::ARRAY_SET:
+        EmitPush(block, TY_INT);
+        EmitTableSet(block);
+        break;
     case ExprNode::TABLE_GET:
-        EmitTableGet(block, expr->Op().String());
+        EmitPush(block, expr->Op().String());
+        EmitPush(block, TY_STRING);
+        EmitTableGet(block);
         break;
     case ExprNode::TABLE_SET:
-        EmitTableSet(block, expr->Op().String());
+        EmitPush(block, expr->Op().String());
+        EmitPush(block, TY_STRING);
+        EmitTableSet(block);
         break;
     case ExprNode::IDENTIFIER:
         if (expr->GetCall())
@@ -1564,6 +1594,28 @@ void Parser::ParseParameter(std::vector<std::string>& params)
     }
 }
 
+Expr* Parser::ParseArray()
+{
+    if (Match(TokenType::OPEN_BRACKET))
+    {
+        Token tok = Peek();
+        Advance();
+
+        if (Match(TokenType::CLOSE_BRACKET))
+        {
+            Advance();
+
+            return new Expr(nullptr, nullptr, tok, ExprNode::ARRAY);
+        }
+        else
+        {
+            SetError("Missing ']'.");
+        }
+    }
+
+    return nullptr;
+}
+
 void Parser::ParseSelf()
 {
     if (Match(TokenType::SELF))
@@ -1650,7 +1702,9 @@ void Parser::ParseClass()
                             const int id = _functions[token.String() + "::" + function].id;
                             EmitPushDelegate(base, id);
                             EmitPushLocal(base, 0);
-                            EmitTableSet(base, function);
+                            EmitPush(base, function);
+                            EmitPush(base, TY_STRING);
+                            EmitTableSet(base);
                         }
 
                         EmitReturn(base);
@@ -1972,6 +2026,10 @@ Expr* Parser::ParsePrimary()
         Advance();
         return new Expr(nullptr, nullptr, number, ExprNode::INTEGER);
     }
+    else if (Match(TokenType::OPEN_BRACKET))
+    {
+        return ParseArray();
+    }
     else if (Match(TokenType::NEW))
     {
         Token token = Peek();
@@ -1995,11 +2053,21 @@ Expr* Parser::ParsePrimary()
         Advance();
         
         Expr* expr = new Expr(nullptr, nullptr, id, ExprNode::IDENTIFIER);
-        while (Match(TokenType::DOT))
+        while (Match(TokenType::DOT) || Match(TokenType::OPEN_BRACKET))
         {
+            Token token = Peek();
             Advance();
 
-            if (Match(TokenType::IDENTIFIER))
+            if (token.Type() == TokenType::OPEN_BRACKET)
+            {
+                expr = new Expr(expr, ParseTerm(), token, ExprNode::ARRAY_GET);
+
+                if (Match(TokenType::CLOSE_BRACKET))
+                {
+                    Advance();
+                }
+            }
+            else if (Match(TokenType::IDENTIFIER))
             {
                 id = Peek();
                 Advance();
@@ -2022,11 +2090,21 @@ Expr* Parser::ParsePrimary()
         Advance();
 
         Expr* expr = new Expr(nullptr, nullptr, self, ExprNode::SELF);
-        while (Match(TokenType::DOT))
+        while (Match(TokenType::DOT) || Match(TokenType::OPEN_BRACKET))
         {
+            Token token = Peek();
             Advance();
 
-            if (Match(TokenType::IDENTIFIER))
+            if (token.Type() == TokenType::OPEN_BRACKET)
+            {
+                expr = new Expr(expr, ParseTerm(), token, ExprNode::ARRAY_GET);
+
+                if (Match(TokenType::CLOSE_BRACKET))
+                {
+                    Advance();
+                }
+            }
+            else if (Match(TokenType::IDENTIFIER))
             {
                 Token id = Peek();
                 Advance();
@@ -2388,18 +2466,38 @@ Expr* Parser::ParseAssignmentLhs()
         expr = new Expr(nullptr, nullptr, identifier, ExprNode::IDENTIFIER);
     }
 
-    if (Match(TokenType::DOT))
+    if (Match(TokenType::DOT) || Match(TokenType::OPEN_BRACKET))
     {
-        while (Match(TokenType::DOT))
+        while (Match(TokenType::DOT) || Match(TokenType::OPEN_BRACKET))
         {
+            Token token = Peek();
+
             Advance();
-            
-            if (Match(TokenType::IDENTIFIER))
+
+            if (token.Type() == TokenType::OPEN_BRACKET)
+            {
+                Expr* term = ParseTerm();
+
+                if (Match(TokenType::CLOSE_BRACKET))
+                {
+                    Advance();
+                }
+
+                if (Match(TokenType::DOT) || Match(TokenType::OPEN_PARAN) || Match(TokenType::OPEN_BRACKET))
+                {
+                    expr = new Expr(expr, term, token, ExprNode::ARRAY_GET);
+                }
+                else
+                {
+                    expr = new Expr(expr, term, token, ExprNode::ARRAY_SET);
+                }
+            }
+            else if (Match(TokenType::IDENTIFIER))
             {
                 identifier = Peek();
                 Advance();
 
-                if (Match(TokenType::DOT) || Match(TokenType::OPEN_PARAN))
+                if (Match(TokenType::DOT) || Match(TokenType::OPEN_PARAN) || Match(TokenType::OPEN_BRACKET))
                 {
                     expr = new Expr(expr, nullptr, identifier, ExprNode::TABLE_GET);
                 }

@@ -1,0 +1,38 @@
+
+
+class List
+{
+    List()
+    {
+        self.array = [];
+        self.size = 0;
+    }
+
+    function Add(item)
+    {
+        self.array[self.size] = item;
+        self.size++;
+    }
+
+    function RemoveAt(pos)
+    {
+        //self.array = self.array[:pos] + self.array[pos:self.size];
+
+        //for (var i = pos; i < self.size - 1; i++)
+        //{
+        //    self.array[i] = self.array[i + 1];
+        //}
+        self.size--;
+    }
+
+    function At(pos)
+    {
+        return self.array[pos];
+    }
+}
+
+var list = new List;
+for (var i = 0; i < 100; i++)
+{
+    list.Add(i);
+}

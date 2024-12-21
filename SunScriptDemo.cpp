@@ -335,9 +335,11 @@ void SunScript::Demo7()
     SunScript::EmitPop(_block, test);
     SunScript::EmitPush(_block, 10);
     SunScript::EmitPushLocal(_block, test);
-    SunScript::EmitTableSet(_block, "foo");
+    SunScript::EmitPush(_block, "foo");
+    SunScript::EmitTableSet(_block);
     SunScript::EmitPushLocal(_block, test);
-    SunScript::EmitTableGet(_block, "foo");
+    SunScript::EmitPush(_block, "foo");
+    SunScript::EmitTableGet(_block);
     SunScript::EmitCallD(_block, print, 1);
 
     SunScript::EmitDone(_block);

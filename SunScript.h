@@ -415,9 +415,9 @@ namespace SunScript
 
     void EmitTableNew(ProgramBlock* program);
 
-    void EmitTableGet(ProgramBlock* program, const std::string& name);
+    void EmitTableGet(ProgramBlock* program);
 
-    void EmitTableSet(ProgramBlock* program, const std::string& name);
+    void EmitTableSet(ProgramBlock* program);
 
     void EmitDup(ProgramBlock* program);
 

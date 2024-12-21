@@ -27,10 +27,12 @@ factor         - unary ( ( "/" | "*" ) unary )* ;
 unary          - ( "!" | "-" ) unary
                  | call
                  ;
-primary        - NUMBER | STRING | "true" | "false" | "nil"
+primary        - NUMBER | STRING | "true" | "false" | "nil" | array
                  | "(" expression ")"
                  | "new" identifier
+                 | identifier "[" term "]"
                  ;
+array          - "[]" ;
 call           - primary ( "(" argument? ")" );
 argument       - expression ( "," expression )* ;
 function       - "function" identifier "(" parameter? ")" "{" (statement*) "}" ;
@@ -42,5 +44,6 @@ yield          - "yield" call ;
 assignment     - identifier "=" expression
                  | identifier ( "++" | "--")
                  | identifier ( "+=" | "-=" | "*=" | "/=") expression
+                 | identifer "[" term "]" "=" expression
                  ;
 declaration    - "var" indentifier ";" ;
