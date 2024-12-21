@@ -864,6 +864,8 @@ private:
     bool Match(TokenType type);
     void SetError(const std::string& text);
     void EmitExpr(Expr* expr);
+    void EmitChildNodes(Expr* expr);
+    void EmitTableGetNode(Expr* expr);
     Expr* FoldExpr(Expr* expr);
     void EmitFlowGraph(FlowGraph& graph, ProgramBlock* program);
     bool EmitNode(FlowGraph& graph, FlowNode& node, ProgramBlock* program);
@@ -1228,6 +1230,58 @@ Expr* Parser::FoldExpr(Expr* expr)
     return expr;
 }
 
+void Parser::EmitTableGetNode(Expr* expr)
+{
+    ProgramBlock* block = Block();
+
+    if (expr->GetCall())
+    {
+        // TODO: we need to get the 'self' pushed after the args?
+
+        auto call = expr->GetCall();
+
+        auto& args = call->Args();
+        for (int i = int(args.size()) - 1; i >= 0; i--)
+        {
+            EmitExpr(args[i]);
+        }
+
+        EmitExpr(expr->Left());
+        EmitDup(block);
+        EmitPush(block, expr->Op().String());
+        EmitPush(block, TY_STRING);
+        EmitTableGet(block);
+
+        if (call->Discard())
+        {
+            EmitCallM(block, static_cast<unsigned char>(call->Args().size()) + 1);
+        }
+        else
+        {
+            EmitCallO(block, static_cast<unsigned char>(call->Args().size()) + 1);
+        }
+        return;
+    }
+
+    EmitChildNodes(expr);
+    EmitPush(block, expr->Op().String());
+    EmitPush(block, TY_STRING);
+    EmitTableGet(block);
+}
+
+void Parser::EmitChildNodes(Expr* expr)
+{
+    if (expr->Left())
+    {
+        EmitExpr(expr->Left());
+    }
+
+    if (expr->Right())
+    {
+        EmitExpr(expr->Right());
+    }
+}
+
 void Parser::EmitExpr(Expr* expr)
 {
     if (expr->GetFold().IsInteger())
@@ -1251,69 +1305,34 @@ void Parser::EmitExpr(Expr* expr)
 
     Token tok = expr->Op();
 
-    if (expr->GetCall())
-    {
-        if (expr->Node() == ExprNode::TABLE_GET)
-        {
-            // TODO: we need to get the 'self' pushed after the args?
-
-            auto call = expr->GetCall();
-
-            auto& args = call->Args();
-            for (int i = int(args.size()) - 1; i >= 0; i--)
-            {
-                EmitExpr(args[i]);
-            }
-
-            EmitExpr(expr->Left());
-            EmitDup(block);
-            EmitPush(block, expr->Op().String());
-            EmitPush(block, TY_STRING);
-            EmitTableGet(block);
-
-            if (call->Discard())
-            {
-                EmitCallM(block, static_cast<unsigned char>(call->Args().size()) + 1);
-            }
-            else
-            {
-                EmitCallO(block, static_cast<unsigned char>(call->Args().size()) + 1);
-            }
-            return;
-        }
-    }
-
-    if (expr->Left())
-    {
-        EmitExpr(expr->Left());
-    }
-
-    if (expr->Right())
-    {
-        EmitExpr(expr->Right());
-    }
-
     switch (expr->Node())
     {
     case ExprNode::EQUALS_EQUALS:
+        EmitChildNodes(expr);
         EmitCompare(block);
         break;
     case ExprNode::NOT_EQUALS:
+        EmitChildNodes(expr);
         EmitCompare(block);
         break;
     case ExprNode::INCREMENT:
+        EmitChildNodes(expr);
         EmitIncrement(block);
         break;
     case ExprNode::DECREMENT:
+        EmitChildNodes(expr);
         EmitDecrement(block);
         break;
     case ExprNode::ADD:
+        EmitChildNodes(expr);
         EmitAdd(block);
         break;
     case ExprNode::MUL:
+        EmitChildNodes(expr);
         EmitMul(block);
         break;
     case ExprNode::SUB:
+        EmitChildNodes(expr);
         if (binary)
         {
             EmitSub(block);
@@ -1324,33 +1343,43 @@ void Parser::EmitExpr(Expr* expr)
         }
         break;
     case ExprNode::DIV:
+        EmitChildNodes(expr);
         EmitDiv(block);
         break;
     case ExprNode::GREATER:
+        EmitChildNodes(expr);
         EmitCompare(block);
         break;
     case ExprNode::LESS:
+        EmitChildNodes(expr);
         EmitCompare(block);
         break;
     case ExprNode::GREATER_EQUALS:
+        EmitChildNodes(expr);
         EmitCompare(block);
         break;
     case ExprNode::LESS_EQUALS:
+        EmitChildNodes(expr);
         EmitCompare(block);
         break;
     case ExprNode::STRING:
+        EmitChildNodes(expr);
         EmitPush(block, tok.String());
         break;
     case ExprNode::NUMBER:
+        EmitChildNodes(expr);
         EmitPush(block, tok.Number());
         break;
     case ExprNode::INTEGER:
+        EmitChildNodes(expr);
         EmitPush(block, tok.Integer());
         break;
     case ExprNode::SELF:
+        EmitChildNodes(expr);
         EmitPushLocal(block, 0);
         break;
     case ExprNode::NEW:
+        EmitChildNodes(expr);
         EmitTableNew(block);
         if (expr->GetCall())
         {
@@ -1360,27 +1389,30 @@ void Parser::EmitExpr(Expr* expr)
         }
         break;
     case ExprNode::ARRAY:
+        EmitChildNodes(expr);
         EmitTableNew(block);
         break;
     case ExprNode::ARRAY_GET:
+        EmitChildNodes(expr);
         EmitPush(block, TY_INT);
         EmitTableGet(block);
         break;
     case ExprNode::ARRAY_SET:
+        EmitChildNodes(expr);
         EmitPush(block, TY_INT);
         EmitTableSet(block);
         break;
     case ExprNode::TABLE_GET:
-        EmitPush(block, expr->Op().String());
-        EmitPush(block, TY_STRING);
-        EmitTableGet(block);
+        EmitTableGetNode(expr);
         break;
     case ExprNode::TABLE_SET:
+        EmitChildNodes(expr);
         EmitPush(block, expr->Op().String());
         EmitPush(block, TY_STRING);
         EmitTableSet(block);
         break;
     case ExprNode::IDENTIFIER:
+        EmitChildNodes(expr);
         if (expr->GetCall())
         {
             Call* call = expr->GetCall();
