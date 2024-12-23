@@ -3270,7 +3270,7 @@ static void Op_TableGet(VirtualMachine* vm)
     case TY_INT:
     {
         const int key = *(int*)identifier;
-        if (key >= 0 && key < tbl->_array.size())
+        if (key < 0 || key >= tbl->_array.size())
         {
             vm->running = false;
             vm->statusCode = VM_ERROR;
@@ -3303,6 +3303,28 @@ static void Op_TableGet(VirtualMachine* vm)
     if (vm->tracing) {
         Trace_Abort(vm);
     }
+}
+
+static void* CopyToTable(VirtualMachine* vm, void* data)
+{
+    void* copy = nullptr;
+    const int type = vm->mm.GetType(data);
+    switch (type)
+    {
+        case TY_INT:
+            copy = vm->mm.New(sizeof(int), TY_INT);
+            *(int*)copy = *(int*)data;
+            break;
+        case TY_REAL:
+            copy = vm->mm.New(sizeof(real), TY_REAL);
+            *(real*)copy = *(real*)data;
+            break;
+        default:
+            copy = data; // pass by value
+            break;
+    }
+
+    return copy;
 }
 
 static void Op_TableSet(VirtualMachine* vm)
@@ -3345,7 +3367,7 @@ static void Op_TableSet(VirtualMachine* vm)
     case TY_STRING:
     {
         const char* name = (char*)identifier;
-        tbl->_map[name] = next;
+        tbl->_map[name] = CopyToTable(vm, next);
     }
         break;
     case TY_INT:
@@ -3355,7 +3377,7 @@ static void Op_TableSet(VirtualMachine* vm)
         {
             tbl->_array.resize(key + 1);
         }
-        tbl->_array[key] = next;
+        tbl->_array[key] = CopyToTable(vm, next);
     }
         break;
     default:

@@ -2551,6 +2551,25 @@ Expr* Parser::ParseAssignmentLhs()
     return expr;
 }
 
+static Expr* Clone(Expr* lhs)
+{
+    Expr* left = nullptr;
+    if (lhs->Left())
+    {
+        left = lhs->Left()->Clone();
+    }
+
+    Expr* right = nullptr;
+    if (lhs->Right())
+    {
+        right = lhs->Right()->Clone();
+    }
+
+    Expr* clone = new Expr(left, right, lhs->Op(),
+        lhs ->Node() == ExprNode::TABLE_SET ? ExprNode::TABLE_GET : lhs->Node());
+    return clone;
+}
+
 Expr* Parser::ParseAssignment(Expr* lhs)
 {
     Token op = Peek();
@@ -2563,12 +2582,12 @@ Expr* Parser::ParseAssignment(Expr* lhs)
     else if (Match(TokenType::INCREMENT))
     {
         Advance();
-        expr = new Expr(lhs->Clone(), nullptr, op, ExprNode::INCREMENT);
+        expr = new Expr(Clone(lhs), nullptr, op, ExprNode::INCREMENT);
     }
     else if (Match(TokenType::DECREMENT))
     {
         Advance();
-        expr = new Expr(lhs->Clone(), nullptr, op, ExprNode::DECREMENT);
+        expr = new Expr(Clone(lhs), nullptr, op, ExprNode::DECREMENT);
     }
     else if (Match(TokenType::PLUS_EQUALS) ||
         Match(TokenType::MINUS_EQUALS) ||
@@ -2594,21 +2613,7 @@ Expr* Parser::ParseAssignment(Expr* lhs)
             break;
         }
 
-        Expr* left = nullptr;
-        if (lhs->Left())
-        {
-            left = lhs->Left()->Clone();
-        }
-
-        Expr* right = nullptr;
-        if (lhs->Right())
-        {
-            right = lhs->Right()->Clone();
-        }
-
-        Expr* clone = new Expr(left, right, lhs->Op(),
-            lhs ->Node() == ExprNode::TABLE_SET ? ExprNode::TABLE_GET : lhs->Node());
-        expr = new Expr(clone, ParseExpression(), op, type);
+        expr = new Expr(Clone(lhs), ParseExpression(), op, type);
     }
     else
     {

@@ -112,6 +112,7 @@ static int Handler(VirtualMachine* vm)
     {
         real param;
         std::string str;
+        int intParam;
         if (VM_OK == GetParamReal(vm, &param))
         {
             std::cout << param << std::endl;
@@ -120,6 +121,11 @@ static int Handler(VirtualMachine* vm)
         else if (VM_OK == GetParamString(vm, &str))
         {
             std::cout << str << std::endl;
+            return VM_OK;
+        }
+        else if (VM_OK == GetParamInt(vm, &intParam))
+        {
+            std::cout << intParam << std::endl;
             return VM_OK;
         }
     }
