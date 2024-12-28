@@ -3,14 +3,14 @@
 class List
 {
     List()
-    {
-        self.array = [];
+    { 
         self.size = 0;
     }
 
     function Add(item)
     {
-        self.array[self.size] = item;
+        var x = self;
+        x[self.size] = item;
         self.size++;
     }
 
@@ -27,7 +27,7 @@ class List
 
     function At(pos)
     {
-        return self.array[pos];
+        return self[pos];
     }
 }
 
@@ -37,8 +37,28 @@ for (var i = 0; i < 10; i++)
     list.Add(i);
 }
 
-//for (var i = 0; i < 10; i++)
-//{
-//    DebugLog(list.At(i));
-//}
+for (var i = 0; i < 10; i++)
+{
+    assert(i, list.At(i));
+}
+
+var list2 = new List;
+list2.Add("test");
+list2.Add("test2");
+
+assert("test", list2.At(0));
+
+var array =[];
+array[0] = 5;
+assert(5, array[0]);
+array.x = 10;
+assert(10, array.x);
+array.y = list2;
+
+if(list2 != array.y)
+{
+    assertFalse();
+}
+
+
 

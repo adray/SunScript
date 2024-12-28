@@ -70,14 +70,17 @@ namespace SunScript
     constexpr unsigned char IR_LOAD_INT = 0x0;
     constexpr unsigned char IR_LOAD_STRING = 0x1;
     constexpr unsigned char IR_LOAD_REAL = 0x2;
+    constexpr unsigned char IR_LOAD_TABLE = 0x3;
     constexpr unsigned char IR_LOAD_INT_LOCAL = 0x10;
     constexpr unsigned char IR_LOAD_STRING_LOCAL = 0x11;
     constexpr unsigned char IR_LOAD_REAL_LOCAL = 0x12;
+    constexpr unsigned char IR_LOAD_TABLE_LOCAL = 0x13;
     constexpr unsigned char IR_CALL = 0x20;
     constexpr unsigned char IR_YIELD = 0x21;
     constexpr unsigned char IR_INT_ARG = 0x25;
     constexpr unsigned char IR_STRING_ARG = 0x26;
     constexpr unsigned char IR_REAL_ARG = 0x27;
+    constexpr unsigned char IR_TABLE_ARG = 0x28;
     constexpr unsigned char IR_INCREMENT_INT = 0x30;
     constexpr unsigned char IR_DECREMENT_INT = 0x31;
     constexpr unsigned char IR_INCREMENT_REAL = 0x32;
@@ -101,6 +104,7 @@ namespace SunScript
     constexpr unsigned char IR_CMP_INT = 0x51;
     constexpr unsigned char IR_CMP_STRING = 0x52;
     constexpr unsigned char IR_CMP_REAL = 0x53;
+    constexpr unsigned char IR_CMP_TABLE = 0x54;
     constexpr unsigned char IR_LOOPBACK = 0x60;
     constexpr unsigned char IR_LOOPSTART = 0x61;
     constexpr unsigned char IR_LOOPEXIT = 0x62;
@@ -109,6 +113,13 @@ namespace SunScript
     constexpr unsigned char IR_UNBOX = 0x65;
     constexpr unsigned char IR_NOP = 0x66;
     constexpr unsigned char IR_CONV_INT_TO_REAL = 0x70;
+    constexpr unsigned char IR_TABLE_NEW = 0x80;
+    constexpr unsigned char IR_TABLE_HGET = 0x81;
+    constexpr unsigned char IR_TABLE_AGET = 0x82;
+    constexpr unsigned char IR_TABLE_HSET = 0x83;
+    constexpr unsigned char IR_TABLE_ASET = 0x84;
+    constexpr unsigned char IR_TABLE_AREF = 0x85;
+    constexpr unsigned char IR_TABLE_HREF = 0x86;
 
     constexpr int BUILD_FLAG_SINGLE = 0x1;
     constexpr int BUILD_FLAG_DOUBLE = 0x2;
@@ -296,6 +307,16 @@ namespace SunScript
     int ResumeScript(VirtualMachine* vm);
 
     MemoryManager* GetMemoryManager(VirtualMachine* vm);
+
+    void* CreateTable(MemoryManager* mm);
+
+    void* GetTableArray(void* table, int index);
+
+    void* GetTableHash(void* table, const std::string& key);
+
+    void SetTableArray(void* table, int index, void* value);
+
+    void SetTableHash(void* table, const std::string& key, void* value);
 
     int RestoreSnapshot(VirtualMachine* vm, const Snapshot& snap, int number, int ref);
 

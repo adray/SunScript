@@ -2035,6 +2035,7 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
         case IR_MUL_REAL:
         case IR_DIV_REAL:
         case IR_CMP_REAL:
+        case IR_CMP_TABLE:
             p1 = vm_jit_read_int(ir, &pc);
             p2 = vm_jit_read_int(ir, &pc);
             isSSE = true;
@@ -2065,6 +2066,7 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
         case IR_INT_ARG:
         case IR_STRING_ARG:
         case IR_REAL_ARG:
+        case IR_TABLE_ARG:
         {
             const int arg = vm_jit_read_int(ir, &pc);
             liveness[arg] = std::max(liveness[arg], ref - arg);
@@ -2135,11 +2137,23 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             break;
         case IR_LOAD_STRING_LOCAL:
         case IR_LOAD_INT_LOCAL:
+        case IR_LOAD_TABLE_LOCAL:
             pc++;
             break;
         case IR_LOAD_REAL_LOCAL:
             pc++;
             isSSE = true;
+            break;
+        case IR_TABLE_NEW:
+            break;
+        case IR_TABLE_HGET:
+        case IR_TABLE_AGET:
+        case IR_TABLE_ASET:
+        case IR_TABLE_HSET:
+        case IR_TABLE_AREF:
+        case IR_TABLE_HREF:
+            p1 = vm_jit_read_int(ir, &pc);
+            p2 = vm_jit_read_int(ir, &pc);
             break;
         default:
             abort();
@@ -2658,6 +2672,41 @@ extern "C"
         std::memcpy(data, s.c_str(), s.length());
         data[s.length()] = '\0';
         return data;
+    }
+
+    static void* vm_table_new(MemoryManager* mm)
+    {
+        return CreateTable(mm);
+    }
+
+    static void* vm_table_aget(void* table, int index)
+    {
+        return GetTableArray(table, index);
+    }
+
+    static void* vm_table_hget(void* table, char* key)
+    {
+        return GetTableHash(table, key);
+    }
+
+    static void* vm_table_aref(void* table, int index)
+    {
+        return GetTableArray(table, index);
+    }
+
+    static void* vm_table_href(void* table, char* key)
+    {
+        return nullptr;
+    }
+
+    static void* vm_table_aset(void* ref, void* value)
+    {
+        return nullptr;
+    }
+    
+    static void* vm_table_hset(void* ref, void* value)
+    {
+        return nullptr;
     }
 }
 
@@ -3895,6 +3944,48 @@ static void vm_jit_load_real_local(VirtualMachine* vm, Jitter* jitter)
     vm_movsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_ARG1, id * 16 + 8);
 }
 
+static void vm_jit_load_table_local(VirtualMachine* vm, Jitter* jitter)
+{
+    const int id = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
+
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_record);
+    vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, VM_ARG1, 0);
+
+    const int dst = vm_jit_decode_dst(allocation);
+    vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_ARG1, id * 16 + 8);
+}
+
+static void vm_jit_table_new(VirtualMachine* vm, Jitter* jitter)
+{
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+
+    // Emit a call to the table allocation function
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
+    vm_jit_call_internal_x64(jitter, (void*)vm_table_new);
+
+    const int dst = vm_jit_decode_dst(allocation);
+    vm_jit_mov(jitter, allocation, dst);
+}
+
+static void vm_jit_table_hget(VirtualMachine* vm, Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+ 
+    // Emit a call to the table hashmap get function
+
+    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
+    vm_jit_call_internal_x64(jitter, (void*)vm_table_hget);
+
+    const int dst = vm_jit_decode_dst(allocation);
+    vm_jit_mov(jitter, allocation, dst);
+}
+
 static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
 {
     // Store non-volatile registers
@@ -4024,6 +4115,24 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
             break;
         case IR_LOAD_REAL_LOCAL:
             vm_jit_load_real_local(vm, jitter);
+            break;
+        case IR_LOAD_TABLE_LOCAL:
+            vm_jit_load_table_local(vm, jitter);
+            break;
+        case IR_TABLE_NEW:
+            vm_jit_table_new(vm, jitter);
+            break;
+        case IR_TABLE_AGET:
+            break;
+        case IR_TABLE_HGET:
+            break;
+        case IR_TABLE_ASET:
+            break;
+        case IR_TABLE_HSET:
+            break;
+        case IR_TABLE_AREF:
+            break;
+        case IR_TABLE_HREF:
             break;
         default:
             abort();
@@ -4410,6 +4519,9 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
         case IR_INT_ARG:
             std::cout << " IR_INT_ARG " << vm_jit_read_int(trace, &pc) << std::endl;
             break;
+        case IR_TABLE_ARG:
+            std::cout << " IR_TABLE_ARG " << vm_jit_read_int(trace, &pc) << std::endl;
+            break;
         case IR_CMP_INT:
             op1 = vm_jit_read_int(trace, &pc);
             op2 = vm_jit_read_int(trace, &pc);
@@ -4424,6 +4536,11 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             op1 = vm_jit_read_int(trace, &pc);
             op2 = vm_jit_read_int(trace, &pc);
             std::cout << " IR_CMP_STRING " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_CMP_TABLE:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_CMP_TABLE " << op1 << " " << op2 << std::endl;
             break;
         case IR_CONV_INT_TO_REAL:
             std::cout << " IR_CONV_INT_TO_REAL " << vm_jit_read_int(trace, &pc) << std::endl;
@@ -4534,6 +4651,43 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
         case IR_LOAD_STRING_LOCAL:
             op1 = trace[pc++];
             std::cout << " IR_LOAD_STRING_LOCAL " << op1 << std::endl;
+            break;
+        case IR_LOAD_TABLE_LOCAL:
+            op1 = trace[pc++];
+            std::cout << " IR_LOAD_TABLE_LOCAL " << op1 << std::endl;
+            break;
+        case IR_TABLE_NEW:
+            std::cout << " IR_NEW_TABLE" << std::endl;
+            break;
+        case IR_TABLE_HGET:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_TABLE_HGET " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_TABLE_AGET:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_TABLE_AGET " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_TABLE_HSET:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_TABLE_HSET " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_TABLE_ASET:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_TABLE_ASET " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_TABLE_HREF:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_TABLE_HREF " << op1 << " " << op2 << std::endl;
+            break;
+        case IR_TABLE_AREF:
+            op1 = vm_jit_read_int(trace, &pc);
+            op2 = vm_jit_read_int(trace, &pc);
+            std::cout << " IR_TABLE_AREF " << op1 << " " << op2 << std::endl;
             break;
         default:
             std::cout << " UNKNOWN" << std::endl;

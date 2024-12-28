@@ -720,14 +720,17 @@ static std::vector<Code> Instructions = {
     Code({ IR_LOAD_INT, INS_CONSTANT }),
     Code({ IR_LOAD_STRING, INS_CONSTANT }),
     Code({ IR_LOAD_REAL, INS_CONSTANT }),
+    Code({ IR_LOAD_TABLE, INS_CONSTANT }),
     Code({ IR_LOAD_INT_LOCAL, INS_LOCAL }),
     Code({ IR_LOAD_STRING_LOCAL, INS_LOCAL }),
     Code({ IR_LOAD_REAL_LOCAL, INS_LOCAL }),
+    Code({ IR_LOAD_TABLE_LOCAL, INS_LOCAL }),
     Code({ IR_CALL, INS_CALL | INS_ARGS }),
     Code({ IR_YIELD, INS_CALL | INS_ARGS }),
     Code({ IR_INT_ARG, INS_LEFT }),
     Code({ IR_STRING_ARG, INS_LEFT }),
     Code({ IR_REAL_ARG, INS_LEFT }),
+    Code({ IR_TABLE_ARG, INS_LEFT }),
     Code({ IR_INCREMENT_INT, INS_LEFT }),
     Code({ IR_DECREMENT_INT, INS_LEFT }),
     Code({ IR_INCREMENT_REAL, INS_LEFT }),
@@ -751,6 +754,7 @@ static std::vector<Code> Instructions = {
     Code({ IR_CMP_INT, INS_LEFT | INS_RIGHT }),
     Code({ IR_CMP_STRING, INS_LEFT | INS_RIGHT }),
     Code({ IR_CMP_REAL, INS_LEFT | INS_RIGHT }),
+    Code({ IR_CMP_TABLE, INS_LEFT | INS_RIGHT }),
     Code({ IR_LOOPBACK, INS_JUMP | INS_OFFSET }),
     Code({ IR_LOOPSTART, 0 }),
     Code({ IR_LOOPEXIT, INS_JUMP | INS_OFFSET }),
@@ -758,7 +762,14 @@ static std::vector<Code> Instructions = {
     Code({ IR_SNAP, INS_SNAP }),
     Code({ IR_UNBOX, INS_LEFT | INS_TYPE }),
     Code({ IR_NOP, 0 }),
-    Code({ IR_CONV_INT_TO_REAL, INS_LEFT })
+    Code({ IR_CONV_INT_TO_REAL, INS_LEFT }),
+    Code({ IR_TABLE_NEW, 0}),
+    Code({ IR_TABLE_HGET, INS_LEFT | INS_RIGHT }),
+    Code({ IR_TABLE_AGET, INS_LEFT | INS_RIGHT }),
+    Code({ IR_TABLE_HSET, INS_LEFT | INS_RIGHT }),
+    Code({ IR_TABLE_ASET, INS_LEFT | INS_RIGHT }),
+    Code({ IR_TABLE_AREF, INS_LEFT | INS_RIGHT }),
+    Code({ IR_TABLE_HREF, INS_LEFT | INS_RIGHT })
 };
 
 //============================
@@ -1138,6 +1149,9 @@ inline static void Trace_Start(VirtualMachine* vm)
                 case TY_REAL:
                     node = Trace_Instruction(vm, type, { .id = IR_LOAD_REAL_LOCAL, .local = static_cast<unsigned char>(i) });
                     break;
+                case TY_OBJECT:
+                    node = Trace_Instruction(vm, type, { .id = IR_LOAD_TABLE_LOCAL, .local = static_cast<unsigned char>(i) });
+                    break;
                 default:
                     // Unable to start the trace.
                     vm->tracing = false;
@@ -1151,6 +1165,8 @@ inline static void Trace_Start(VirtualMachine* vm)
 
 inline static void Trace_Abort(VirtualMachine* vm)
 {
+    std::cout << "TRACE ABORT" << std::endl;
+
     vm->tracing = false;
 
     Trace* trace = vm->tt.curTrace;
@@ -1162,6 +1178,11 @@ inline static void Trace_Abort(VirtualMachine* vm)
 inline static void Trace_Restore(VirtualMachine* vm, Trace* trace)
 {
     vm->tt.curTrace = trace;
+}
+
+inline static void Trace_Dup(VirtualMachine* vm)
+{
+    TPUSH(vm, TTOP(vm));
 }
 
 inline static void Trace_Real(VirtualMachine* vm, real val)
@@ -1357,6 +1378,15 @@ inline static void Trace_Arg_Int(VirtualMachine* vm)
 inline static void Trace_Arg_Real(VirtualMachine* vm)
 {
     TraceNode* node = Trace_Instruction(vm, TY_VOID, { .id = IR_REAL_ARG });
+    node->left = TTOP(vm);
+
+    TPOP(vm);
+    TINC(vm);
+}
+
+inline static void Trace_Arg_Table(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_Instruction(vm, TY_VOID, { .id = IR_TABLE_ARG });
     node->left = TTOP(vm);
 
     TPOP(vm);
@@ -1593,6 +1623,16 @@ inline static void Trace_Cmp_String(VirtualMachine* vm)
     TINC(vm);
 }
 
+inline static void Trace_Cmp_Table(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_Instruction(vm, TY_VOID, { .id = IR_CMP_TABLE });
+    node->left = TTOP(vm);
+    node->right = TNEXT(vm);
+
+    TPOP2(vm);
+    TINC(vm);
+}
+
 inline static void Trace_Unary_Minus_Real(VirtualMachine* vm)
 {
     TraceNode* node = Trace_Instruction(vm, TY_REAL, { .id = IR_UNARY_MINUS_REAL });
@@ -1692,6 +1732,78 @@ inline static void Trace_ReturnValue(VirtualMachine* vm, int type)
 
     // Push the ref which has pushed onto the stack by the function call.
     vm->tt.curTrace->refs.push_back(vm->tt.curTrace->nodes[vm->tt.curTrace->ref - 1]);
+}
+
+inline static void Trace_TableNew(VirtualMachine* vm)
+{
+    TraceNode* node = Trace_Instruction(vm, TY_OBJECT, { .id = IR_TABLE_NEW });
+
+    TPUSH(vm, node);
+    TINC(vm);
+}
+
+inline static void Trace_TableHGet(VirtualMachine* vm)
+{
+    TPOP(vm); // type
+
+    TraceNode* node = Trace_Instruction(vm, TY_OBJECT, { .id = IR_TABLE_HGET });
+    node->left = TTOP(vm); // identifier
+    node->right = TNEXT(vm); // table
+
+    TPOP2(vm);
+    TPUSH(vm, node);
+    TINC(vm);
+}
+
+inline static void Trace_TableHSet(VirtualMachine* vm)
+{
+    TPOP(vm); // type?
+
+    TraceNode* n1 = Trace_Instruction(vm, TY_VOID, { .id = IR_TABLE_HREF });
+    n1->left = TTOP(vm); // identifier
+    n1->right = TNEXT(vm); // table
+    TPOP2(vm);
+    TINC(vm);
+
+    TraceNode* n2 = Trace_Instruction(vm, TY_VOID, { .id = IR_TABLE_HSET });
+    n2->left = n1; // memory reference
+    n2->right = TTOP(vm); // value
+    
+    TPOP(vm);
+    TPUSH(vm, n2);
+    TINC(vm);
+}
+
+inline static void Trace_TableAGet(VirtualMachine* vm)
+{
+    TPOP(vm); // type
+
+    TraceNode* node = Trace_Instruction(vm, TY_OBJECT, { .id = IR_TABLE_AGET });
+    node->left = TTOP(vm); // identifier
+    node->right = TNEXT(vm); // table                       
+    
+    TPOP2(vm);
+    TPUSH(vm, node);
+    TINC(vm);
+}
+
+inline static void Trace_TableASet(VirtualMachine* vm)
+{
+    TPOP(vm); // type?
+
+    TraceNode* n1 = Trace_Instruction(vm, TY_VOID, { .id = IR_TABLE_AREF });
+    n1->left = TTOP(vm); // identifier
+    n1->right = TNEXT(vm); // table
+    TPOP2(vm);
+    TINC(vm);
+
+    TraceNode* n2 = Trace_Instruction(vm, TY_VOID, { .id = IR_TABLE_ASET });
+    n2->left = n1; // memory reference
+    n2->right = TTOP(vm); // value
+    
+    TPOP(vm);
+    TPUSH(vm, n2);
+    TINC(vm);
 }
 
 static void Trace_Finalize(VirtualMachine* vm)
@@ -2311,7 +2423,8 @@ static void OP_CallO(VirtualMachine* vm, bool discard)
 
             if (vm->tracing)
             {
-                Trace_Abort(vm);
+                vm->tt.curTrace->locals.resize(vm->locals.size());
+                vm->tt.curTrace->flags |= SN_NEEDED; // we need a new snapshot to reflect the change in frames
             }
 
             blk.info.counter++;
@@ -3215,6 +3328,12 @@ static void Op_Compare(VirtualMachine* vm)
 
         if (vm->tracing) { Trace_Cmp_Real(vm); }
     }
+    else if (vm->mm.GetType(item1) == TY_OBJECT && vm->mm.GetType(item2) == TY_OBJECT)
+    {
+        vm->comparer = reinterpret_cast<char*>(item2) - reinterpret_cast<char*>(item1);
+
+        if (vm->tracing) { Trace_Cmp_Table(vm); }
+    }
     else
     {
         vm->running = false;
@@ -3229,7 +3348,7 @@ static void Op_TableNew(VirtualMachine* vm)
     vm->stack.push(ptr);
 
     if (vm->tracing) {
-        Trace_Abort(vm);
+        Trace_TableNew(vm);
     }
 }
 
@@ -3278,6 +3397,10 @@ static void Op_TableGet(VirtualMachine* vm)
         }
 
         vm->stack.push(tbl->_array[key]);
+
+        if (vm->tracing) {
+            Trace_TableAGet(vm);
+        }
     }
         break;
     case TY_STRING:
@@ -3292,16 +3415,16 @@ static void Op_TableGet(VirtualMachine* vm)
         }
 
         vm->stack.push(it->second);
+
+        if (vm->tracing) {
+            Trace_TableHGet(vm);
+        }
     }
         break;
     default:
         vm->running = false;
         vm->statusCode = VM_ERROR;
         break;
-    }
-
-    if (vm->tracing) {
-        Trace_Abort(vm);
     }
 }
 
@@ -3368,6 +3491,10 @@ static void Op_TableSet(VirtualMachine* vm)
     {
         const char* name = (char*)identifier;
         tbl->_map[name] = CopyToTable(vm, next);
+    
+        if (vm->tracing) {
+            Trace_TableHSet(vm);
+        }
     }
         break;
     case TY_INT:
@@ -3378,16 +3505,16 @@ static void Op_TableSet(VirtualMachine* vm)
             tbl->_array.resize(key + 1);
         }
         tbl->_array[key] = CopyToTable(vm, next);
+    
+        if (vm->tracing) {
+            Trace_TableASet(vm);
+        }
     }
         break;
     default:
         vm->running = false;
         vm->statusCode = VM_ERROR;
         break;
-    }
-
-    if (vm->tracing) {
-        Trace_Abort(vm);
     }
 }
 
@@ -3404,7 +3531,7 @@ static void Op_Dup(VirtualMachine* vm)
     vm->stack.push(top);
 
     if (vm->tracing) {
-        Trace_Abort(vm);
+        Trace_Dup(vm);
     }
 }
 
@@ -3416,9 +3543,10 @@ static void Op_Push_Func(VirtualMachine* vm)
     *data = value;
     vm->stack.push(data);
 
-    if (vm->tracing) {
-        Trace_Abort(vm);
-    }
+    // 
+    //if (vm->tracing) {
+    //    Trace_Abort(vm);
+    //}
 }
 
 static void ResetVM(VirtualMachine* vm)
@@ -3881,6 +4009,33 @@ int SunScript::ResumeScript(VirtualMachine* vm)
         vm->tracing = false;
     }
     return state;
+}
+
+void* SunScript::CreateTable(MemoryManager* mm)
+{
+    void* mem = mm->New(TY_OBJECT, sizeof(Table));
+    Table* table = new (mem) Table;
+    return table;
+}
+
+void* SunScript::GetTableArray(void* table, int index)
+{
+    return reinterpret_cast<Table*>(table)->_array[index];
+}
+
+void* SunScript::GetTableHash(void* table, const std::string& key)
+{
+    return reinterpret_cast<Table*>(table)->_map[key];
+}
+
+void SunScript::SetTableArray(void* table, int index, void* value)
+{
+    reinterpret_cast<Table*>(table)->_array[index] = value;
+}
+
+void SunScript::SetTableHash(void* table, const std::string& key, void* value)
+{
+    reinterpret_cast<Table*>(table)->_map[key] = value;
 }
 
 MemoryManager* SunScript::GetMemoryManager(VirtualMachine* vm)
