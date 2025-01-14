@@ -195,6 +195,7 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
 
     std::chrono::steady_clock clock;
     auto startTime = clock.now().time_since_epoch();
+    uint64_t totalMemoryUsage = 0;
 
     const int runCount = 10000;
     if (program)
@@ -218,6 +219,8 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
                 DestroyCallstack(s);
                 break;
             }
+
+            totalMemoryUsage += GetMemoryManager(vm)->TotalMemory();
         }
     }
     else
@@ -227,6 +230,7 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
 
     auto elapsedTime = clock.now().time_since_epoch() - startTime;
     elapsedTime /= runCount;
+    totalMemoryUsage /= runCount;
 
     delete[] program;
     ShutdownVirtualMachine(vm);
@@ -239,7 +243,7 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
     }
     else
     {
-        std::cout << " SUCCESS " << elapsedTime.count() << "ns";
+        std::cout << " SUCCESS " << elapsedTime.count() << "ns " << (totalMemoryUsage / 1024) << "KB";
         if (test->_jit) {
             std::cout << " [JIT]";
         }

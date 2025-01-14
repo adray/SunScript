@@ -2131,6 +2131,7 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
             break;
         case IR_NOP:
             break;
+        case IR_BOX:
         case IR_UNBOX:
             p1 = vm_jit_read_int(ir, &pc);
             pc++; // type
@@ -2612,11 +2613,40 @@ extern "C"
         return size;
     }
 
+    static void* vm_box_int(MemoryManager* mm, int value)
+    {
+        int* integer = reinterpret_cast<int*>(mm->New(sizeof(int), TY_INT));
+        *integer = value;
+        return integer;
+    }
+
+    static void* vm_box_func(MemoryManager* mm, int value)
+    {
+        int* integer = reinterpret_cast<int*>(mm->New(sizeof(int), TY_FUNC));
+        *integer = value;
+        return integer;
+    }
+
+    static void* vm_box_real(MemoryManager* mm, real value)
+    {
+        real* realVal = reinterpret_cast<real*>(mm->New(sizeof(real), TY_REAL));
+        *realVal = value;
+        return realVal;
+    }
+
     static int vm_check_type(MemoryManager* mm, void* obj, int type)
     {
         // TODO: the memory manager we a getting here is different
         // than the one used to allocate thus it fails
         return MemoryManager::GetTypeUnsafe(obj) == type ? VM_OK : VM_ERROR;
+    }
+
+    static char* vm_duplicate_string(MemoryManager* mm, char* str)
+    {
+        const size_t len = std::strlen(str) + 1;
+        char* dup = reinterpret_cast<char*>(mm->New(len, TY_STRING));
+        std::memcpy(dup, str, len);
+        return dup;
     }
 
     static char* vm_append_string_int(MemoryManager* mm, char* left, int right)
@@ -2689,24 +2719,14 @@ extern "C"
         return GetTableHash(table, key);
     }
 
-    static void* vm_table_aref(void* table, int index)
+    static void vm_table_aset(void* table, int key, void* value)
     {
-        return GetTableArray(table, index);
-    }
-
-    static void* vm_table_href(void* table, char* key)
-    {
-        return nullptr;
-    }
-
-    static void* vm_table_aset(void* ref, void* value)
-    {
-        return nullptr;
+        SetTableArray(table, key, value);
     }
     
-    static void* vm_table_hset(void* ref, void* value)
+    static void vm_table_hset(void* table, char* key, void* value)
     {
-        return nullptr;
+        SetTableHash(table, key, value);
     }
 }
 
@@ -2908,6 +2928,16 @@ static void vm_jit_cmp_real(Jitter* jitter)
             vm_ucmpd_memory_to_reg_x64(jitter->jit, jitter->count, dst, a2.pos, a2.reg);
             break;
     }
+}
+
+static void vm_jit_cmp_table(Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+    const JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    const JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+
+    vm_cmp_reg_to_reg_x64(jitter->jit, jitter->count, a1.reg, a2.reg);
 }
 
 static void vm_jit_exitloop(Jitter* jitter)
@@ -3604,11 +3634,73 @@ static void vm_jit_yield(VirtualMachine* vm, Jitter* jitter)
     jitter->refIndex += numParams;
 }
 
+static void vm_jit_box(VirtualMachine* vm, Jitter* jitter)
+{
+    const int id = vm_jit_read_int(jitter->program, jitter->pc);
+
+    JIT_Allocation a1 = jitter->analyzer.GetAllocation(id); // src
+    JIT_Allocation a2 = jitter->analyzer.GetAllocation(jitter->refIndex); // dst
+
+    const int type = jitter->program[*jitter->pc];
+    (*jitter->pc)++;
+
+    const int dst = vm_jit_decode_dst(a2);
+    vm_jit_mov(jitter, a1, dst);
+
+    // Box
+
+    switch (type)
+    {
+    case TY_INT:
+        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_manager->_mm);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, dst);
+        vm_jit_call_internal_x64(jitter, (void*)vm_box_int);
+        break;
+    case TY_FUNC:
+        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_manager->_mm);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, dst);
+        vm_jit_call_internal_x64(jitter, (void*)vm_box_func);
+        break;
+    case TY_REAL:
+        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_manager->_mm);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, dst);
+        vm_jit_call_internal_x64(jitter, (void*)vm_box_real);
+        break;
+    case TY_STRING:
+
+        // Duplicate the string, since if the string is a constant it doesn't exist in the memory manager.
+        // Therefore, when it is unboxed it fails because we unable ascertain the type.
+
+        vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_manager->_mm);
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, dst);
+        vm_jit_call_internal_x64(jitter, (void*)vm_duplicate_string);
+        break;
+    }
+
+    switch (type)
+    {
+    case TY_INT:
+    case TY_REAL:
+    case TY_FUNC:
+    case TY_STRING:
+        if (a2.type == ST_REG)
+        {
+            vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, a2.reg, VM_REGISTER_EAX);
+        }
+        else
+        {
+            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, a2.reg, a2.pos, VM_REGISTER_EAX);
+        }
+        break;
+    }
+}
+
 static void vm_jit_unbox(VirtualMachine* vm, Jitter* jitter)
 {
     const int id = vm_jit_read_int(jitter->program, jitter->pc);
 
-    JIT_Allocation al = jitter->analyzer.GetAllocation(id);
+    JIT_Allocation al = jitter->analyzer.GetAllocation(id); // src
+    JIT_Allocation al2 = jitter->analyzer.GetAllocation(jitter->refIndex); // dst
 
     const int type = jitter->program[*jitter->pc];
     (*jitter->pc)++;
@@ -3639,14 +3731,15 @@ static void vm_jit_unbox(VirtualMachine* vm, Jitter* jitter)
     switch (type)
     {
     case TY_INT:
-        dst = vm_jit_decode_dst(al);
+    case TY_FUNC:
+        dst = vm_jit_decode_dst(al2);
         vm_jit_mov(jitter, al, VM_REGISTER_EAX);
         vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_REGISTER_EAX, 0); // de-reference
 
-        switch (al.type)
+        switch (al2.type)
         {
         case ST_STACK:
-            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, dst);
+            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al2.reg, al2.pos, dst);
             break;
         case ST_REG:
             //vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
@@ -3655,19 +3748,23 @@ static void vm_jit_unbox(VirtualMachine* vm, Jitter* jitter)
 
         break;
     case TY_REAL:
-        dst = vm_jit_decode_dst(al);
+        dst = vm_jit_decode_dst(al2);
         vm_jit_mov(jitter, al, VM_REGISTER_EAX);
         vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_REGISTER_EAX, 0); // de-reference
 
-        switch (al.type)
+        switch (al2.type)
         {
         case ST_STACK:
-            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al.reg, al.pos, dst);
+            vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, al2.reg, al2.pos, dst);
             break;
         case ST_REG:
             //vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, al.reg, VM_REGISTER_EAX);
             break;
         }
+        break;
+    default:
+        dst = vm_jit_decode_dst(al2);
+        vm_jit_mov(jitter, al, dst);
         break;
     }
 }
@@ -3967,23 +4064,127 @@ static void vm_jit_table_new(VirtualMachine* vm, Jitter* jitter)
     vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
     vm_jit_call_internal_x64(jitter, (void*)vm_table_new);
 
-    const int dst = vm_jit_decode_dst(allocation);
-    vm_jit_mov(jitter, allocation, dst);
+    switch (allocation.type)
+    {
+    case ST_REG:
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, allocation.reg, VM_REGISTER_EAX);
+        break;
+    case ST_STACK:
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, allocation.reg, allocation.pos, VM_REGISTER_EAX);
+        break;
+    }
 }
 
 static void vm_jit_table_hget(VirtualMachine* vm, Jitter* jitter)
 {
     const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
     const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+
     JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+    JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
  
     // Emit a call to the table hashmap get function
 
-    vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_trace->_mm);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, a2.reg);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
     vm_jit_call_internal_x64(jitter, (void*)vm_table_hget);
 
-    const int dst = vm_jit_decode_dst(allocation);
-    vm_jit_mov(jitter, allocation, dst);
+    switch (allocation.type)
+    {
+    case ST_REG:
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, allocation.reg, VM_REGISTER_EAX);
+        break;
+    case ST_STACK:
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, allocation.reg, allocation.pos, VM_REGISTER_EAX);
+        break;
+    }
+}
+
+static void vm_jit_table_aget(VirtualMachine* vm, Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+    JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+
+    // Emit a call to the table array get function
+
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, a2.reg);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
+    vm_jit_call_internal_x64(jitter, (void*)vm_table_aget);
+
+    switch (allocation.type)
+    {
+    case ST_REG:
+        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, allocation.reg, VM_REGISTER_EAX);
+        break;
+    case ST_STACK:
+        vm_mov_reg_to_memory_x64(jitter->jit, jitter->count, allocation.reg, allocation.pos, VM_REGISTER_EAX);
+        break;
+    }
+}
+
+static void vm_jit_table_hset(VirtualMachine* vm, Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+    JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+
+    // Emit a call to the table hashmap set function
+
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, a2.reg);
+    vm_jit_call_internal_x64(jitter, (void*)vm_table_hset);
+}
+
+static void vm_jit_table_aset(VirtualMachine* vm, Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+    JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+
+    // Emit a call to the table array set function
+
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG3, a2.reg);
+    vm_jit_call_internal_x64(jitter, (void*)vm_table_aset);
+}
+
+static void vm_jit_table_href(VirtualMachine* vm, Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+    JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+
+    // Emit a call to the table hashmap set function
+
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, a2.reg);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
+}
+
+static void vm_jit_table_aref(VirtualMachine* vm, Jitter* jitter)
+{
+    const int ref1 = vm_jit_read_int(jitter->program, jitter->pc);
+    const int ref2 = vm_jit_read_int(jitter->program, jitter->pc);
+
+    JIT_Allocation allocation = jitter->analyzer.GetAllocation(jitter->refIndex);
+    JIT_Allocation a1 = jitter->analyzer.GetAllocation(ref1);
+    JIT_Allocation a2 = jitter->analyzer.GetAllocation(ref2);
+
+    // Emit a call to the table array set function
+
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, a2.reg);
+    vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, a1.reg);
 }
 
 static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
@@ -4047,6 +4248,9 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_CMP_REAL:
             vm_jit_cmp_real(jitter);
             break;
+        case IR_CMP_TABLE:
+            vm_jit_cmp_table(jitter);
+            break;
         case IR_CONV_INT_TO_REAL:
             vm_jit_conv_int_to_real(jitter);
             break;
@@ -4104,6 +4308,9 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
         case IR_UNBOX:
             vm_jit_unbox(vm, jitter);
             break;
+        case IR_BOX:
+            vm_jit_box(vm, jitter);
+            break;
         case IR_NOP:
             // Nothing
             break;
@@ -4123,16 +4330,22 @@ static void vm_jit_generate_trace(VirtualMachine* vm, Jitter* jitter)
             vm_jit_table_new(vm, jitter);
             break;
         case IR_TABLE_AGET:
+            vm_jit_table_aget(vm, jitter);
             break;
         case IR_TABLE_HGET:
+            vm_jit_table_hget(vm, jitter);
             break;
         case IR_TABLE_ASET:
+            vm_jit_table_aset(vm, jitter);
             break;
         case IR_TABLE_HSET:
+            vm_jit_table_hset(vm, jitter);
             break;
         case IR_TABLE_AREF:
+            vm_jit_table_aref(vm, jitter);
             break;
         case IR_TABLE_HREF:
+            vm_jit_table_href(vm, jitter);
             break;
         default:
             abort();
@@ -4635,6 +4848,11 @@ void SunScript::JIT_DumpTrace(unsigned char* trace, unsigned int size)
             }
             std::cout << " ]" << std::endl;
             break;
+        case IR_BOX:
+            op2 = vm_jit_read_int(trace, &pc);
+            op1 = trace[pc++];
+            std::cout << " IR_BOX " << op1 << " " << op2 << std::endl;
+            break;
         case IR_UNBOX:
             op2 = vm_jit_read_int(trace, &pc);
             op1 = trace[pc++];
@@ -4733,7 +4951,7 @@ void* SunScript::JIT_CompileTrace(void* instance, VirtualMachine* vm, unsigned c
     //==============================
     jitter->_trace->_startTime = clock.now().time_since_epoch().count();
 
-    const int jitDataSize = 1024 * 3;
+    const int jitDataSize = 1024 * 5;
     unsigned int pc = 0;
 
     jitter->program = trace;

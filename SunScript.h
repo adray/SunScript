@@ -51,6 +51,7 @@ namespace SunScript
 
     constexpr unsigned char OP_TRPUSH = OP_PUSH | MK_TRACESTART;
     constexpr unsigned char OP_TRPUSH_LOCAL = OP_PUSH_LOCAL | MK_TRACESTART;
+    constexpr unsigned char OP_TRTABLE_NEW = OP_TABLE_NEW | MK_TRACESTART;
 
     constexpr unsigned char TY_VOID = 0x0;
     constexpr unsigned char TY_INT = 0x1;
@@ -58,6 +59,7 @@ namespace SunScript
     constexpr unsigned char TY_REAL = 0x3;
     constexpr unsigned char TY_OBJECT = 0x4;
     constexpr unsigned char TY_FUNC = 0x5;
+    constexpr unsigned char TY_TABLE = 0x6;
 
     constexpr unsigned char JUMP = 0x0;
     constexpr unsigned char JUMP_E = 0x1;
@@ -111,7 +113,8 @@ namespace SunScript
     constexpr unsigned char IR_PHI = 0x63;
     constexpr unsigned char IR_SNAP = 0x64;
     constexpr unsigned char IR_UNBOX = 0x65;
-    constexpr unsigned char IR_NOP = 0x66;
+    constexpr unsigned char IR_BOX = 0x66;
+    constexpr unsigned char IR_NOP = 0x67;
     constexpr unsigned char IR_CONV_INT_TO_REAL = 0x70;
     constexpr unsigned char IR_TABLE_NEW = 0x80;
     constexpr unsigned char IR_TABLE_HGET = 0x81;
@@ -163,6 +166,8 @@ namespace SunScript
         void Release(void* mem);
         char GetType(void* mem) const;
         void Reset();
+        uint64_t TotalMemory();
+        uint64_t UsedMemory();
         static char GetTypeUnsafe(void* mem);
         ~MemoryManager();
 
