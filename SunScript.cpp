@@ -4088,12 +4088,26 @@ void* SunScript::CreateTable(MemoryManager* mm)
 
 void* SunScript::GetTableArray(void* table, int index)
 {
-    return reinterpret_cast<Table*>(table)->_array[index];
+    Table* tbl = reinterpret_cast<Table*>(table);
+
+    if (index >= 0 && index < tbl->_array.size())
+    {
+        return tbl->_array[index];
+    }
+
+    return nullptr;
 }
 
 void* SunScript::GetTableHash(void* table, const std::string& key)
 {
-    return reinterpret_cast<Table*>(table)->_map[key];
+    Table* tbl = reinterpret_cast<Table*>(table);
+    const auto& it = tbl->_map.find(key);
+    if (it != tbl->_map.end())
+    {
+        return it->second;
+    }
+
+    return nullptr;
 }
 
 void SunScript::SetTableArray(void* table, int index, void* value)
