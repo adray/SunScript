@@ -85,6 +85,8 @@ static int Handler(VirtualMachine* vm)
         int intParam2;
         std::string strParam1;
         std::string strParam2;
+        real realParam1;
+        real realParam2;
         if (VM_OK == GetParamInt(vm, &intParam1) &&
             VM_OK == GetParamInt(vm, &intParam2))
         {
@@ -105,6 +107,20 @@ static int Handler(VirtualMachine* vm)
             {
                 std::stringstream ss;
                 ss << "Assert failure: Expected " << strParam1 << " but was " << strParam2;
+
+                test->_failed = true;
+                test->_failureMessage = ss.str();
+                return VM_ERROR;
+            }
+            return VM_OK;
+        }
+        else if (VM_OK == GetParamReal(vm, &realParam1) &&
+            VM_OK == GetParamReal(vm, &realParam2))
+        {
+            if (realParam1 != realParam2)
+            {
+                std::stringstream ss;
+                ss << "Assert failure: Expected " << realParam1 << " but was " << realParam2;
 
                 test->_failed = true;
                 test->_failureMessage = ss.str();

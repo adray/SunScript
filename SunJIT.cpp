@@ -2132,9 +2132,15 @@ void JIT_Analyzer::Load(unsigned char* ir, unsigned int count)
         case IR_NOP:
             break;
         case IR_BOX:
-        case IR_UNBOX:
             p1 = vm_jit_read_int(ir, &pc);
             pc++; // type
+            break;
+        case IR_UNBOX:
+            p1 = vm_jit_read_int(ir, &pc);
+            if (ir[pc++] == TY_REAL) // type
+            {
+                isSSE = true;
+            }
             break;
         case IR_LOAD_STRING_LOCAL:
         case IR_LOAD_INT_LOCAL:
@@ -3645,7 +3651,10 @@ static void vm_jit_box(VirtualMachine* vm, Jitter* jitter)
     (*jitter->pc)++;
 
     const int dst = vm_jit_decode_dst(a2);
-    vm_jit_mov(jitter, a1, dst);
+    if (!a1.isSSE)
+    {
+        vm_jit_mov(jitter, a1, dst);
+    }
 
     // Box
 
@@ -3663,7 +3672,14 @@ static void vm_jit_box(VirtualMachine* vm, Jitter* jitter)
         break;
     case TY_REAL:
         vm_mov_imm_to_reg_x64(jitter->jit, jitter->count, VM_ARG1, (long long)&jitter->_manager->_mm);
-        vm_mov_reg_to_reg_x64(jitter->jit, jitter->count, VM_ARG2, dst);
+        if (a1.type == ST_REG)
+        {
+            vm_movsd_reg_to_reg_x64(jitter->jit, jitter->count, VM_SSE_ARG2, a1.reg);
+        }
+        else
+        {
+            vm_movsd_memory_to_reg_x64(jitter->jit, jitter->count, VM_SSE_ARG2, a1.reg, a1.pos);
+        }
         vm_jit_call_internal_x64(jitter, (void*)vm_box_real);
         break;
     case TY_STRING:
@@ -3679,8 +3695,8 @@ static void vm_jit_box(VirtualMachine* vm, Jitter* jitter)
 
     switch (type)
     {
-    case TY_INT:
     case TY_REAL:
+    case TY_INT:
     case TY_FUNC:
     case TY_STRING:
         if (a2.type == ST_REG)
@@ -3748,9 +3764,9 @@ static void vm_jit_unbox(VirtualMachine* vm, Jitter* jitter)
 
         break;
     case TY_REAL:
-        dst = vm_jit_decode_dst(al2);
+        dst = vm_jit_decode_dst_sse(al2);
         vm_jit_mov(jitter, al, VM_REGISTER_EAX);
-        vm_mov_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_REGISTER_EAX, 0); // de-reference
+        vm_movsd_memory_to_reg_x64(jitter->jit, jitter->count, dst, VM_REGISTER_EAX, 0); // de-reference
 
         switch (al2.type)
         {
