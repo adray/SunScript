@@ -15,7 +15,7 @@ SunScript is a dynamically typed scripting language designed to be embedded with
 
 ```
 var y = 0;
-for (var x = 0; i < 5; i++)
+for (var i = 0; i < 5; i++)
 {
     y += i;
 }
@@ -64,4 +64,10 @@ class MyClass
 
 var c = new MyClass;
 c.Increment();
+```
+
+<h2>Coroutines</h2>
+
+```
+yield Foo();
 ```
