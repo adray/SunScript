@@ -34,9 +34,10 @@ public:
 class SunTestSuite
 {
 public:
-    SunTestSuite() : _numFailures(0), _dumpTrace(false) {}
+    SunTestSuite() : _numFailures(0), _dumpTrace(false), _debug(false) {}
 
     inline void EnableDumpTrace(bool enabled) { _dumpTrace = enabled; }
+    inline void EnableDebug(bool enabled) { _debug = enabled; }
     
     void AddTest(const std::string& filename)
     {
@@ -57,11 +58,13 @@ public:
 
     int NumFailures() const { return _numFailures; }
     bool DumpTrace() const { return _dumpTrace; }
+    bool Debug() const { return _debug; }
 
 private:
     std::vector<SunTest> _tests;
     int _numFailures;
     bool _dumpTrace;
+    bool _debug;
 };
 
 static int Handler(VirtualMachine* vm)
@@ -202,6 +205,11 @@ static int RunTest(SunTestSuite* suite, SunTest* test)
         SetJIT(vm, &jit);
     }
 
+    if (!suite->Debug())
+    {
+        SetOptimizationLevel(vm, 1);
+    }
+
     unsigned char* program;
     unsigned char* debug;
     int programSize;
@@ -298,6 +306,7 @@ void SunScript::RunTestSuite(const std::string& path, int opts)
 
     SunTestSuite* suite = new SunTestSuite();
     suite->EnableDumpTrace(opts & OPT_DUMPTRACE);
+    suite->EnableDebug(opts & OPT_DEBUG);
     if (std::filesystem::is_directory(path))
     {
         std::filesystem::directory_iterator it(path);

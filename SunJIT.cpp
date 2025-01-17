@@ -3898,6 +3898,7 @@ static void vm_jit_store_snapshot(VirtualMachine* vm, Jitter* jitter, const int 
 
     for (size_t i = 0; i < live.size(); i++)
     {
+        live[i].al.pos += snapshotsize; // bump the stack position for each register which is pushed to the stack as it increments the ESP register
         snapshotsize += vm_jit_store(jitter, live[i]);
     }
 

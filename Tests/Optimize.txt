@@ -13,3 +13,7 @@ for (var i = 0; i < 1000; i++) {
     x += a + b + c + d + e + f + g;
 }
 
+// TODO: this bugs in JIT mode because there are many variables when restoring the 1st trace the 'x' needs to get
+// pushed to the stack. However, it has it's stack location moved underneath itself by the other variables
+// which get pushed first altering the rsp value.
+assert(x, 28000);

@@ -3185,7 +3185,7 @@ void SunScript::CompileFile(const std::string& filepath,
         }
     }
 
-    int GetOpts(int numArgs, char** args)
+    static int GetOpts(int numArgs, char** args)
     {
         int opt = OPT_NONE;
         for (int i = 0; i < numArgs; i++)
@@ -3194,6 +3194,11 @@ void SunScript::CompileFile(const std::string& filepath,
             {
                 opt |= OPT_DUMPTRACE;
                 std::cout << "Dumping trace: on" << std::endl;
+            }
+            else if (std::strcmp(args[i], "--debug") == 0)
+            {
+                opt |= OPT_DEBUG;
+                std::cout << "Optimizations: off" << std::endl;
             }
         }
         return opt;
