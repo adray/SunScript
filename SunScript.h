@@ -140,6 +140,9 @@ namespace SunScript
     struct ProgramBlock;
     struct FunctionInfo;
 
+    /*
+    * Memory Manager
+    */
     class MemoryManager
     {
     private:
@@ -175,6 +178,9 @@ namespace SunScript
         std::vector<Segment> _segments;
     };
 
+    /*
+    * Snapshot
+    */
     class Snapshot
     {
     private:
@@ -196,6 +202,9 @@ namespace SunScript
         int _index;
     };
 
+    /*
+    * Activation Record
+    */
     class ActivationRecord
     {
     public:

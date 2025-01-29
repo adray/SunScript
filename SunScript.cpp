@@ -1728,26 +1728,29 @@ inline static void Trace_Snap(VirtualMachine* vm)
         {
             snap.frames.emplace_back(frame);
         }
-        
-        std::vector<bool> usedRefs;
-        usedRefs.resize(vm->tt.curTrace->ref);
+
+        //std::vector<bool> usedRefs;
+        // usedRefs.resize(vm->tt.curTrace->ref);
 
         for (size_t i = 0; i < vm->tt.curTrace->locals.size(); i++)
         {
             TraceNode* node = vm->tt.curTrace->locals[i];
 
-            if (node && !usedRefs[node->ref])
+            if (node /*&& !usedRefs[node->ref]*/)
             {
                 auto& local = snap.locals.emplace_back();
                 local.index = int(i);
                 local.ref = node;
-                usedRefs[node->ref] = true;
+                //usedRefs[node->ref] = true;
             }
         }
 
-        TraceNode* node = Trace_Instruction(vm, TY_VOID, { .id = IR_SNAP,
-            .snapCount = static_cast<unsigned char>(snap.locals.size()),
-            .snapId = char(vm->tt.curTrace->snaps.size() - 1)} );
+        TraceNode* node = Trace_Instruction(vm, TY_VOID,
+            {
+                .id = IR_SNAP,
+                .snapCount = static_cast<unsigned char>(snap.locals.size()),
+                .snapId = char(vm->tt.curTrace->snaps.size() - 1)
+            } );
 
         TINC(vm);
     }
@@ -4157,7 +4160,51 @@ int SunScript::RestoreSnapshot(VirtualMachine* vm, const Snapshot& snap, int num
     vm->localBounds = int(numLocals - lastFrameNumLocals);
     vm->locals.resize(numLocals);
     vm->stackBounds = 0;
-    for (int i = 0 ; i < snap.Count(); i++)
+
+    for (auto& local : sn.locals)
+    {
+        for (int i = 0; i < snap.Count(); i++)
+        {
+            int ref;
+            int64_t val;
+
+            snap.Get(i, &ref, &val);
+
+            const int type = vm->tt.curTrace->nodes[ref]->type;
+
+            if (local.ref->ref == ref)
+            {
+                void* data;
+                switch (type)
+                {
+                case TY_INT:
+                    data = vm->mm.New(sizeof(int), TY_INT);
+                    *reinterpret_cast<int*>(data) = int(val);
+                    vm->locals[local.index] = data;
+                    break;
+                case TY_FUNC:
+                    data = vm->mm.New(sizeof(int), TY_FUNC);
+                    *reinterpret_cast<int*>(data) = int(val);
+                    vm->locals[local.index] = data;
+                    break;
+                case TY_STRING:
+                case TY_TABLE:
+                    vm->locals[local.index] = reinterpret_cast<void*>(val); // boxed
+                    break;
+                case TY_REAL:
+                    data = vm->mm.New(sizeof(real), TY_REAL);
+                    *reinterpret_cast<real*>(data) = *reinterpret_cast<real*>(&val);
+                    vm->locals[local.index] = data;
+                    break;
+                }
+
+                break;
+            }
+        }
+    }
+
+
+    /*for (int i = 0; i < snap.Count(); i++)
     {
         int ref;
         int64_t val;
@@ -4228,7 +4275,7 @@ int SunScript::RestoreSnapshot(VirtualMachine* vm, const Snapshot& snap, int num
             }
             vm->stackBounds++;
         }
-    }
+    }*/
 
     return VM_OK;
 }

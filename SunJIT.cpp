@@ -77,12 +77,12 @@ enum vm_sse_register
 #define VM_SSE_ARG2 VM_SSE_REGISTER_XMM1
 #define VM_SSE_ARG3 VM_SSE_REGISTER_XMM2
 #define VM_SSE_ARG4 VM_SSE_REGISTER_XMM3
-#define VM_SSE_ARG5 (-1)
-#define VM_SSE_ARG6 (-1)
+#define VM_SSE_ARG5 VM_SSE_REGISTER_XMM4
+#define VM_SSE_ARG6 VM_SSE_REGISTER_XMM5
 #define VM_SSE_ARG7 (-1)
 #define VM_SSE_ARG8 (-1)
 #define VM_MAX_ARGS 4
-#define VM_MAX_SSE_ARGS 4
+#define VM_MAX_SSE_ARGS 6
 #else
 #define VM_ARG1 VM_REGISTER_EDI
 #define VM_ARG2 VM_REGISTER_ESI
@@ -637,25 +637,19 @@ static void vm_emit_ui(const vm_instruction& ins, unsigned char* program, int& c
 static void vm_emit_sse_brr(const vm_sse_instruction& ins, unsigned char* program, int& count, int src, int dst)
 {
     assert(ins.code == CODE_BRR);
+    assert(ins.enc == VMI_ENC_A);
     if (ins.ins1 != VMI_UNUSED) {
         program[count++] = ins.ins1;
     }
     unsigned char rex = ins.rex;
-    if (dst >= VM_SSE_REGISTER_XMM8) { rex |= 0x1 | (1 << 6); }
-    if (src >= VM_SSE_REGISTER_XMM8) { rex |= 0x4 | (1 << 6); }
+    if (src >= VM_SSE_REGISTER_XMM8) { rex |= 0x1 | (1 << 6); }
+    if (dst >= VM_SSE_REGISTER_XMM8) { rex |= 0x4 | (1 << 6); }
 
     if (rex > 0) { program[count++] = rex;  }
     program[count++] = ins.ins2;
     program[count++] = ins.ins3;
 
-    if (ins.enc == VMI_ENC_A)
-    {
-        program[count++] = (((dst % 8) & 0x7) << 3) | (0x3 << 6) | ((src % 8) & 0x7);
-    }
-    else if (ins.enc == VMI_ENC_C)
-    {
-        program[count++] = (((src % 8) & 0x7) << 3) | (0x3 << 6) | ((dst % 8) & 0x7);
-    }
+    program[count++] = (((dst % 8) & 0x7) << 3) | (0x3 << 6) | ((src % 8) & 0x7);
 }
 
 static void vm_emit_sse_brmo(const vm_sse_instruction& ins, unsigned char* program, int& count, int src, int dst, int src_offset)
@@ -1066,9 +1060,9 @@ inline static void vm_movsd_reg_to_reg_x64(unsigned char* program, int& count, i
 inline static void vm_movsd_reg_to_memory_x64(unsigned char* program, int& count, int dst, int src, int dst_offset)
 {
 #ifdef USE_SUN_FLOAT
-    vm_emit_sse_bmro(gInstructions_SSE[VMI_SSE_MOVSS_SRC_REG_DST_MEM], program, count, dst, src, dst_offset);
+    vm_emit_sse_bmro(gInstructions_SSE[VMI_SSE_MOVSS_SRC_REG_DST_MEM], program, count, src, dst, dst_offset);
 #else
-    vm_emit_sse_bmro(gInstructions_SSE[VMI_SSE_MOVSD_SRC_REG_DST_MEM], program, count, dst, src, dst_offset);
+    vm_emit_sse_bmro(gInstructions_SSE[VMI_SSE_MOVSD_SRC_REG_DST_MEM], program, count, src, dst, dst_offset);
 #endif
 }
 
@@ -3891,8 +3885,6 @@ static void vm_jit_store_snapshot(VirtualMachine* vm, Jitter* jitter, const int 
 
     std::vector<JIT_LiveValue> live;
     jitter->analyzer.GetLiveValues(snapshot._ref, live);
-
-    assert(snapshot.entries.size() <= live.size());
 
     int snapshotsize = 0;
 

@@ -1380,13 +1380,34 @@ void Parser::EmitExpr(Expr* expr)
         break;
     case ExprNode::NEW:
         EmitChildNodes(expr);
-        EmitTableNew(block);
+        if (frame._vars.find(""/*temporary variable*/) == frame._vars.end())
+        {
+            EmitLocal(block, "");
+            frame._vars.insert(std::pair<std::string, int>("", int(frame._vars.size())));
+            EmitTableNew(block);
+            EmitPop(block, int(frame._vars.size()) - 1);
+        }
+        else
+        {
+            EmitTableNew(block);
+            EmitPop(block, frame._vars[""]);
+        }
         if (expr->GetCall())
         {
-            const int id = ForwardDeclareFunction(tok.String() + "::.ctr");
-            EmitDup(block);
-            EmitCallD(block, id, 1);
+            Call* call = expr->GetCall();
+            auto& args = call->Args();
+            for (int i = int(args.size()) - 1; i >= 0; i--)
+            {
+                EmitExpr(args[i]);
+            }
+
+            std::stringstream ss;
+            ss << tok.String() << "::.ctr" << int(args.size() + 1);
+            const int id = ForwardDeclareFunction(ss.str());
+            EmitPushLocal(block, frame._vars[""]);
+            EmitCallD(block, id, int(args.size() + 1));
         }
+        EmitPushLocal(block, frame._vars[""]);
         break;
     case ExprNode::ARRAY:
         EmitChildNodes(expr);
@@ -1743,7 +1764,7 @@ void Parser::ParseClass()
                         EmitProgramBlock(_program, base);
 
                         // Generate default constructor?
-                        const std::string name = token.String() + "::.ctr";
+                        const std::string name = token.String() + "::.ctr1";
                         const auto& it = _functions.find(name);
                         if (it == _functions.end() || !it->second.blk)
                         {
@@ -1798,11 +1819,13 @@ void Parser::ParseConstructor(const std::string& name)
             {
                 Advance();
 
-                const std::string function = name + "::.ctr";
-
                 params.push_back("self"); // This
                 
                 ParseParameter(params);
+
+                std::stringstream ss;
+                ss << name << "::.ctr" << params.size();
+                const std::string function = ss.str();
 
                 block = CreateProgramBlock(false, function, int(params.size()));
 
@@ -2010,6 +2033,11 @@ Expr* Parser::ParseCall()
     if (Match(TokenType::OPEN_PARAN))
     {
         Advance();
+
+        if (expr->GetCall())
+        {
+            delete expr->GetCall();
+        }
 
         Call* call = ParseArgument();
         expr->SetCall(call);
@@ -2643,14 +2671,14 @@ void Parser::ParseVar()
                 {
                     const int var = int(top._vars.size());
 
+                    StackFrame& frame = _frames.top();
+                    frame._vars.insert(std::pair<std::string, int>(identifier.String(), var));
+                    frame._scope.top().insert(identifier.String());
+
                     EmitExpr(FoldExpr(expr));
                     EmitLocal(Block(), identifier.String());
                     EmitPop(Block(), var);
                     FreeExpr(expr);
-
-                    StackFrame& frame = _frames.top();
-                    frame._vars.insert(std::pair<std::string, int>(identifier.String(), var));
-                    frame._scope.top().insert(identifier.String());
 
                     Advance();
                 }

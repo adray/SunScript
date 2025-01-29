@@ -7,6 +7,12 @@ class Vector2
         self.y = 0.0;
     }
 
+    Vector2(x, y)
+    {
+        self.x = x;
+        self.y = y;
+    }
+
     function add(vec)
     {
         self.x += vec.x;
@@ -51,3 +57,7 @@ assert(d, 83.0);
 
 //var q = v1.scale;
 //DebugLog(q);
+
+var v3 = new Vector2(3.0, 2.0);
+assert(v3.x, 3.0);
+assert(v3.y, 2.0);
