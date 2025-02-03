@@ -7,10 +7,12 @@ set (SUN_SOURCES
     "Sun.cpp"
     "SunScriptDemo.cpp"
     "SunJIT.cpp"
+    "SunOpt.cpp"
     "SunScript.h"
     "Sun.h"
     "SunScriptDemo.h"
     "SunJIT.h"
+    "SunOpt.h"
     "Tests/SunTest.h"
     "Tests/SunTest.cpp"
 )
