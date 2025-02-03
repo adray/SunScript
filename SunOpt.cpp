@@ -1,5 +1,6 @@
 #include "SunOpt.h"
 #include "SunScript.h"
+#include <cstring>
 
 using namespace SunScript;
 
