@@ -311,26 +311,6 @@ namespace SunScript
     constexpr int MIN_TRACE_SIZE = 12;      // the minimum size of a trace to compile it
     constexpr int MAX_TRACE_SIZE = 200;     // the maximum size of a trace
 
-    struct StackFrame
-    {
-        int debugLine;
-        int returnAddress;
-        int stackBounds;
-        int localBounds;
-        bool discard;
-        FunctionInfo* func;
-        std::string functionName;
-
-        StackFrame() :
-            debugLine(0),
-            returnAddress(0),
-            stackBounds(0),
-            localBounds(0),
-            func(nullptr),
-            discard(false)
-        {}
-    };
-
     struct Block
     {
         int numArgs;
@@ -353,8 +333,6 @@ namespace SunScript
         unsigned char id;
         int flags;
     };
-
-
 
     struct TraceGuard
     {
@@ -384,24 +362,6 @@ namespace SunScript
             start(0),
             end(0),
             active(false)
-        {}
-    };
-
-    struct TraceSnapshot
-    {
-        struct Local
-        {
-            TraceNode* ref;
-            int index;  // index to locals
-        };
-
-        unsigned int pc;
-        std::vector<StackFrame> frames;
-        std::vector<Local> locals;
-
-        TraceSnapshot()
-            :
-            pc(0)
         {}
     };
 
@@ -727,12 +687,6 @@ inline static TraceNode* Trace_Instruction(VirtualMachine* vm, const int type, c
     vm->tt.curTrace->nodes.push_back(node);
 
     return node;
-}
-
-inline static void Trace_Suspend(VirtualMachine* vm)
-{
-    Trace* trace = vm->tt.curTrace;
-    vm->tracingPaused = true;
 }
 
 inline static void Trace_Start(VirtualMachine* vm)
@@ -1322,7 +1276,7 @@ inline static void Trace_Snap(VirtualMachine* vm)
         }
 
         //std::vector<bool> usedRefs;
-        // usedRefs.resize(vm->tt.curTrace->ref);
+        //usedRefs.resize(vm->tt.curTrace->ref);
 
         for (size_t i = 0; i < vm->tt.curTrace->locals.size(); i++)
         {
@@ -1333,7 +1287,7 @@ inline static void Trace_Snap(VirtualMachine* vm)
                 auto& local = snap.locals.emplace_back();
                 local.index = int(i);
                 local.ref = node;
-                //usedRefs[node->ref] = true;
+                /*usedRefs[node->ref] = true;*/
             }
         }
 
@@ -1482,6 +1436,8 @@ static void Trace_Finalize(VirtualMachine* vm)
 
         Optimizer opt;
 
+        //Opt_Optimize_Loops(&vm->tt.curTrace->mm, vm->traceConstants, vm->tt.curTrace->nodes, vm->tt.curTrace->snaps);
+
         //==================
         // Forward pass
         //==================
@@ -1577,6 +1533,10 @@ static void Trace_Finalize(VirtualMachine* vm)
 
 static void Trace_Compile(VirtualMachine* vm)
 {
+    // TODO: if we can compile the traces in backward order
+    // then we can jump to the next trace if they are consecutive
+    // (it will look confusing in the trace dumping however)
+
     for (size_t i = 0; i < vm->tt.numTraces; i++)
     {
         Trace* trace = &vm->tt.traces[i];
@@ -2705,12 +2665,14 @@ static void ComputePhis(VirtualMachine* vm, TraceLoop& loop)
                 phi->ref = loop.startRef->ref + numPhiNodesInserted;
                 phi->flags = 0;
                 phi->pc = vm->programCounter;
-                phi->type = TY_VOID;
+                phi->type = local.maxRef->type;
                 vm->tt.curTrace->nodes.insert(vm->tt.curTrace->nodes.begin() + loop.startRef->ref + numPhiNodesInserted, phi);
 
                 vm->tt.curTrace->ref++;
 
                 numPhiNodesInserted++;
+
+                vm->tt.curTrace->locals[i] = phi; // Update the local to point to the PHI node
             }
         }
 
@@ -3340,9 +3302,9 @@ static void LoopStart(VirtualMachine* vm)
             Trace_Abort(vm);
             Trace_Start(vm);
         }
-        else
+        else if (vm->tt.curTrace->nodes.size() >= 20)
         {
-            // Otherwise finish the current trace and start a new trace for the loop.
+            // Otherwise finish the current trace if it is getting long and start a new trace for the loop.
             Trace_Snap(vm);
             Trace_Finalize(vm);
             Trace_Start(vm);

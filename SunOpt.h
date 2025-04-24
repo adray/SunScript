@@ -1,9 +1,13 @@
 #pragma once
 #include <vector>
 #include <unordered_set>
+#include <string>
 
 namespace SunScript
 {
+    class MemoryManager;
+    struct FunctionInfo;
+
     struct InsData
     {
         unsigned char id;
@@ -36,6 +40,46 @@ namespace SunScript
         int ref;                // ref
         int type;               // the type of the result
         int pc;
+    };
+
+    struct StackFrame
+    {
+        int debugLine;
+        int returnAddress;
+        int stackBounds;
+        int localBounds;
+        bool discard;
+        FunctionInfo* func;
+        std::string functionName;
+
+        StackFrame() :
+            debugLine(0),
+            returnAddress(0),
+            stackBounds(0),
+            localBounds(0),
+            func(nullptr),
+            discard(false)
+        {
+        }
+    };
+
+    struct TraceSnapshot
+    {
+        struct Local
+        {
+            TraceNode* ref;
+            int index;  // index to locals
+        };
+
+        unsigned int pc;
+        std::vector<StackFrame> frames;
+        std::vector<Local> locals;
+
+        TraceSnapshot()
+            :
+            pc(0)
+        {
+        }
     };
 
     class IRBuffer
@@ -87,9 +131,12 @@ namespace SunScript
         }
     };
 
+    void Opt_Optimize_Loops(MemoryManager* mm,
+        std::vector<unsigned char>& constants,
+        std::vector<TraceNode*>& nodes,
+        std::vector<TraceSnapshot>& snaps);
     void Opt_Optimize_Forward(Optimizer& opt, std::vector<unsigned char>& constants, TraceNode* node);
     void Opt_Optimize_Backward(Optimizer& opt, std::vector<unsigned char>& constants, TraceNode* node);
     void Opt_Drain(Optimizer& opt, std::vector<unsigned char>& constants);
 
 }
-

@@ -1212,19 +1212,19 @@ static real vm_jit_read_real(unsigned char* program, unsigned int* pc);
 // Basic block descriptor
 //==================================
 
-struct BasicBlockDescriptor
+/*struct BasicBlockDescriptor
 {
     unsigned int _begin;
     unsigned int _end;
     unsigned int _jumpPos;
     char _jumpType;
     short _jump;
-};
+};*/
 
 //==================================
 // Basic block edge
 //==================================
-class BasicBlock;
+/*class BasicBlock;
 
 struct BasicBlockEdge
 {
@@ -1233,13 +1233,13 @@ struct BasicBlockEdge
     BasicBlock* _false;
     double _trueWeight;
     double _falseWeight;
-};
+};*/
 
 //==================================
 // Basic block
 //==================================
 
-class BasicBlock
+/*class BasicBlock
 {
 public:
     BasicBlock(BasicBlockDescriptor desc);
@@ -1349,7 +1349,7 @@ void BasicBlock::CreateEdge()
 
         _next->_edges.push_back(edge);
     }
-}
+}*/
 
 //==================================
 // Bitfield
